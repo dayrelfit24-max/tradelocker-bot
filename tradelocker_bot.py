@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-TradeLocker Webhook Bot
+TradeLocker + Tradovate Webhook Bot
 
 Port    : 5002
-Endpoint: POST /tl/webhook?secret=<WEBHOOK_SECRET>  (also /nt/webhook)
+Endpoints:
+  POST /tl/webhook?secret=<WEBHOOK_SECRET>   — TradeLocker (also /nt/webhook)
+  POST /tradovate/webhook?secret=<SECRET>    — Tradovate futures
 Health  : GET  /health
 """
 
-import os, logging, threading
+import os, logging, threading, time
+import requests as _requests
 from flask import Flask, request, jsonify
 
 # ── Config ─────────────────────────────────────────────────────────────────
@@ -45,13 +48,166 @@ MIN_LOT         = float(cfg.get("MIN_LOT",  "0.01"))
 MAX_LOT         = float(cfg.get("MAX_LOT",  "50.0"))
 WEBHOOK_SECRET  = cfg.get("WEBHOOK_SECRET", os.getenv("WEBHOOK_SECRET", "tradelocker_dayrel_2026"))
 
+# All TradeLocker account IDs to trade on simultaneously
+_acct1 = cfg.get("TL_ACCOUNT_ID",   "")
+_acct2 = cfg.get("TL_ACCOUNT_ID_2", "")
+TL_ACCOUNT_IDS = [int(a) for a in [_acct1, _acct2] if a.strip()]
+
+# ── Tradovate config ────────────────────────────────────────────────────────
+TV_USER    = cfg.get("TV_USERNAME", os.getenv("TV_USERNAME", ""))
+TV_PASS    = cfg.get("TV_PASSWORD", os.getenv("TV_PASSWORD", ""))
+TV_CID     = int(cfg.get("TV_CID",  os.getenv("TV_CID", "0")))
+TV_SEC     = cfg.get("TV_SECRET",   os.getenv("TV_SECRET", ""))
+TV_BASE    = "https://live.tradovateapi.com/v1"
+
+# Contract multipliers: $ per point per 1 contract
+# M6E: 12,500 EUR × $1/point = $12,500 per full-point move (price like 1.0850)
+# Practical: 1 pip (0.0001) = $1.25 per contract
+TV_MULTIPLIERS = {
+    "MES": 5,      "ES": 50,
+    "MNQ": 2,      "NQ": 20,
+    "M2K": 5,      "RTY": 50,
+    "MYM": 0.5,    "YM": 5,
+    "MGC": 10,     "GC": 100,
+    "MCL": 100,    "CL": 1000,
+    "MBT": 5,
+    "M6E": 12500,  "6E": 125000,   # EUR/USD micro & full
+    "M6A": 10000,  "6A": 100000,   # AUD/USD micro & full
+    "M6B": 6250,   "6B": 62500,    # GBP/USD micro & full
+    "M6J": 1250,   "6J": 12500000, # JPY/USD micro & full (price ~0.0066)
+}
+
+def tv_point_value(root: str) -> float:
+    for prefix, val in TV_MULTIPLIERS.items():
+        if root.upper().startswith(prefix):
+            return val
+    return 1.0
+
 # ── Logging ────────────────────────────────────────────────────────────────
+_log_file = os.path.join(_script_dir, "bot.log")
+_file_handler = logging.FileHandler(_log_file)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-8s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-8s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.StreamHandler(), _file_handler],
 )
 log = logging.getLogger(__name__)
+
+# ── Tradovate client ───────────────────────────────────────────────────────
+_tv_token      = None
+_tv_account_id = None
+_tv_username   = None
+_tv_lock       = threading.Lock()
+_tv_token_time = 0.0
+
+def _tv_authenticate():
+    global _tv_token, _tv_account_id, _tv_username, _tv_token_time
+    r = _requests.post(f"{TV_BASE}/auth/accesstokenrequest", json={
+        "name": TV_USER, "password": TV_PASS,
+        "appId": "TradeBot", "appVersion": "1.0",
+        "cid": TV_CID, "sec": TV_SEC,
+        "deviceId": "railway-webhook-bot",
+    }, timeout=15)
+    r.raise_for_status()
+    d = r.json()
+    tok = d.get("accessToken")
+    if not tok:
+        raise RuntimeError(f"Tradovate auth failed: {d.get('errorText', d)}")
+    _tv_token      = tok
+    _tv_token_time = time.time()
+    # Grab account ID
+    h = {"Authorization": f"Bearer {tok}"}
+    accs = _requests.get(f"{TV_BASE}/account/list", headers=h, timeout=10).json()
+    if accs:
+        _tv_account_id = accs[0]["id"]
+        _tv_username   = accs[0].get("name", TV_USER)
+    log.info("✅  Tradovate connected  account_id=%s", _tv_account_id)
+
+def _tv_headers():
+    global _tv_token, _tv_token_time
+    with _tv_lock:
+        # Re-auth every 55 minutes
+        if _tv_token is None or (time.time() - _tv_token_time) > 3300:
+            _tv_authenticate()
+        return {"Authorization": f"Bearer {_tv_token}"}
+
+def _tv_find_contract(root: str) -> tuple[str, int] | tuple[None, None]:
+    """Return (contractName, contractId) for the front-month contract of root symbol."""
+    h = _tv_headers()
+    # Step 1: find the product to get its ID
+    r = _requests.get(f"{TV_BASE}/product/find", params={"name": root}, headers=h, timeout=10)
+    if r.status_code == 200:
+        product = r.json()
+        product_id = product.get("id")
+        if product_id:
+            # Step 2: get active contract maturities for this product
+            r2 = _requests.get(f"{TV_BASE}/contractMaturity/deps",
+                               params={"masterid": product_id}, headers=h, timeout=10)
+            if r2.status_code == 200 and r2.json():
+                maturities = r2.json()
+                # Front month = first non-expired maturity sorted by expiry date
+                maturities.sort(key=lambda m: m.get("expirationDate", ""))
+                for m in maturities:
+                    if not m.get("isFront") is False:
+                        contract_id = m.get("id")
+                        # Get the actual contract name
+                        r3 = _requests.get(f"{TV_BASE}/contract/item",
+                                           params={"id": contract_id}, headers=h, timeout=10)
+                        if r3.status_code == 200:
+                            c = r3.json()
+                            return c.get("name"), c.get("id")
+    # Fallback: direct find (works if user passes full name like "M6EU6")
+    r4 = _requests.get(f"{TV_BASE}/contract/find", params={"name": root}, headers=h, timeout=10)
+    if r4.status_code == 200:
+        d = r4.json()
+        return d.get("name"), d.get("id")
+    log.error("Could not find Tradovate contract for symbol '%s'", root)
+    return None, None
+
+def _tv_get_balance() -> float:
+    h = _tv_headers()
+    r = _requests.get(f"{TV_BASE}/cashBalance/getcashbalancesnapshot",
+                      params={"accountId": _tv_account_id}, headers=h, timeout=10)
+    if r.status_code == 200:
+        d = r.json()
+        return float(d.get("totalCashValue", d.get("cashBalance", 0)))
+    # Fallback
+    r2 = _requests.get(f"{TV_BASE}/account/item", params={"id": _tv_account_id}, headers=h, timeout=10)
+    if r2.status_code == 200:
+        return float(r2.json().get("cashBalance", 0))
+    return 0.0
+
+def _tv_place_order(contract_name: str, action: str, qty: int, sl: float, tp: float) -> dict:
+    """Place a bracket market order on Tradovate."""
+    h = _tv_headers()
+    tv_action  = "Buy"  if action == "buy"  else "Sell"
+    exit_action = "Sell" if action == "buy"  else "Buy"
+    payload = {
+        "accountSpec": _tv_username,
+        "accountId":   _tv_account_id,
+        "action":      tv_action,
+        "symbol":      contract_name,
+        "orderQty":    qty,
+        "orderType":   "Market",
+        "isAutomated": True,
+        "bracket1": {
+            "action":    exit_action,
+            "orderType": "Stop",
+            "stopPrice": sl,
+            "qty":       qty,
+        },
+        "bracket2": {
+            "action":    exit_action,
+            "orderType": "Limit",
+            "price":     tp,
+            "qty":       qty,
+        },
+    }
+    r = _requests.post(f"{TV_BASE}/order/placeorder", json=payload, headers=h, timeout=15)
+    r.raise_for_status()
+    return r.json()
 
 # ── TradeLocker client ─────────────────────────────────────────────────────
 _tl = None
@@ -72,14 +228,19 @@ def get_tl():
             log.info("✅  TradeLocker connected!")
         return _tl
 
-def get_balance(tl) -> float | None:
-    """Try to get account balance from TLAPI."""
+def get_balance(tl, account_id: int | None = None) -> float | None:
+    """Try to get account balance from TLAPI. If account_id given, return that account's balance."""
     try:
         accounts = tl.get_all_accounts()
         log.info("Accounts columns: %s", list(accounts.columns))
-        # Try common column names
         for col in ["accountBalance", "balance", "equity", "Balance", "Equity"]:
             if col in accounts.columns:
+                if account_id and "id" in accounts.columns:
+                    row = accounts[accounts["id"] == account_id]
+                    if not row.empty:
+                        val = float(row[col].iloc[0])
+                        log.info("Account %s balance (%s): %.2f", account_id, col, val)
+                        return val
                 val = float(accounts[col].iloc[0])
                 log.info("Account balance (%s): %.2f", col, val)
                 return val
@@ -126,7 +287,7 @@ def webhook():
             return jsonify({"error": f"Missing field: {field}"}), 422
 
     action = data["action"].lower()
-    symbol = str(data["symbol"]).upper()
+    symbol = str(data.get("symbol") or data.get("ticker", "NAS100")).upper()
     entry  = float(data["entry"])
     sl     = float(data["sl"])
     tp     = float(data["tp"])
@@ -134,83 +295,164 @@ def webhook():
     if action not in ("buy", "sell"):
         return jsonify({"error": f"Unknown action: {action}"}), 422
 
-    try:
-        tl = get_tl()
+    # ── Respond to TradingView immediately (avoids 3s timeout) ───────────────
+    def process_trade():
+        try:
+            tl = get_tl()
+            risk_pct_override = float(data["risk_pct"]) if "risk_pct" in data else None
 
-        # ── Position size: risk % from alert payload or config default ──
-        risk_pct_override = float(data["risk_pct"]) if "risk_pct" in data else None
-        balance = get_balance(tl)
-        if balance and balance > 0:
-            qty = calc_lot_size(balance, entry, sl, risk_pct=risk_pct_override)
-        else:
-            qty = float(data.get("qty", 0.1))
-            log.warning("Could not get balance — using fallback qty=%.2f", qty)
-
-        # ── Instrument lookup ──────────────────────────────────────────
-        instrument_id = tl.get_instrument_id_from_symbol_name(symbol)
-        if not instrument_id:
+            # ── Instrument lookup (same for all accounts) ──────────────────
             aliases = {
                 "US30": "DJ30",  "DJ30":  "US30",
                 "XAUUSD": "GOLD","GOLD":  "XAUUSD",
                 "NAS100": "USTEC","USTEC": "NAS100",
                 "SPX500": "US500","US500": "SPX500",
             }
-            alt = aliases.get(symbol)
-            if alt:
-                instrument_id = tl.get_instrument_id_from_symbol_name(alt)
-                if instrument_id:
-                    log.info("Symbol alias: %s → %s", symbol, alt)
-        if not instrument_id:
-            return jsonify({"error": f"Symbol '{symbol}' not found"}), 422
+            instrument_id = tl.get_instrument_id_from_symbol_name(symbol)
+            if not instrument_id:
+                alt = aliases.get(symbol)
+                if alt:
+                    instrument_id = tl.get_instrument_id_from_symbol_name(alt)
+                    if instrument_id:
+                        log.info("Symbol alias: %s → %s", symbol, alt)
+            if not instrument_id:
+                log.error("Symbol '%s' not found", symbol)
+                return
 
-        log.info(
-            "ORDER → %s %s x%.2f  entry=%.5f  sl=%.5f  tp=%.5f",
-            action.upper(), symbol, qty, entry, sl, tp,
-        )
+            # ── Build account map: {account_id: acc_num} ──────────────────
+            all_accounts = tl.get_all_accounts()
+            acct_map = {}
+            if "id" in all_accounts.columns and "accNum" in all_accounts.columns:
+                for _, row in all_accounts.iterrows():
+                    acct_map[int(row["id"])] = int(row["accNum"])
+            log.info("Account map: %s", acct_map)
 
-        # ── Place market order with SL & TP ───────────────────────────
-        order_id = tl.create_order(
-            instrument_id,
-            quantity=qty,
-            side=action,
-            type_="market",
-            stop_loss=sl,
-            stop_loss_type="absolute",
-            take_profit=tp,
-            take_profit_type="absolute",
-        )
+            # ── Place order on every configured account ────────────────────
+            account_ids = TL_ACCOUNT_IDS if TL_ACCOUNT_IDS else [None]
+            for acct_id in account_ids:
+                try:
+                    if acct_id and acct_id in acct_map:
+                        acc_num = acct_map[acct_id]
+                        tl._set_account_id_and_acc_num(account_id=acct_id, acc_num=acc_num)
+                        log.info("Switching to account %s (acc_num=%s)", acct_id, acc_num)
+                    elif acct_id:
+                        log.error("❌  Account %s not found in TradeLocker — skipping", acct_id)
+                        continue
 
-        if order_id:
-            log.info("✅  %s %s x%.2f  SL=%.5f  TP=%.5f  order_id=%s",
-                     action.upper(), symbol, qty, sl, tp, order_id)
-            return jsonify({
-                "status":   "ok",
-                "order_id": str(order_id),
-                "qty":      qty,
-                "sl":       sl,
-                "tp":       tp,
-            }), 200
-        else:
-            log.error("Order returned no ID")
-            return jsonify({"error": "Order failed — no order_id returned"}), 500
+                    balance = get_balance(tl, acct_id)
+                    if not balance or balance <= 0:
+                        log.error("❌  Balance fetch failed for account %s — skipping", acct_id)
+                        continue
+                    qty = calc_lot_size(balance, entry, sl, risk_pct=risk_pct_override)
 
-    except Exception as exc:
-        log.error("❌  %s", exc)
-        global _tl
-        with _tl_lock:
-            _tl = None   # force re-auth on next request
-        return jsonify({"error": str(exc)}), 500
+                    log.info(
+                        "ORDER [acct=%s] → %s %s x%.2f  entry=%.5f  sl=%.5f  tp=%.5f",
+                        acct_id, action.upper(), symbol, qty, entry, sl, tp,
+                    )
+
+                    order_id = tl.create_order(
+                        instrument_id,
+                        quantity=qty,
+                        side=action,
+                        type_="market",
+                        stop_loss=sl,
+                        stop_loss_type="absolute",
+                        take_profit=tp,
+                        take_profit_type="absolute",
+                    )
+
+                    if order_id:
+                        log.info("✅  [acct=%s] %s %s x%.2f  SL=%.5f  TP=%.5f  order_id=%s",
+                                 acct_id, action.upper(), symbol, qty, sl, tp, order_id)
+                    else:
+                        log.error("❌  [acct=%s] Order returned no ID", acct_id)
+
+                except Exception as exc:
+                    log.error("❌  [acct=%s] %s", acct_id, exc)
+
+        except Exception as exc:
+            log.error("❌  %s", exc)
+            global _tl
+            with _tl_lock:
+                _tl = None   # force re-auth on next request
+
+    t = threading.Thread(target=process_trade, daemon=True)
+    t.start()
+    return jsonify({"status": "received", "action": action, "symbol": symbol}), 200
+
+
+@app.route("/tradovate/webhook", methods=["POST"])
+def tradovate_webhook():
+    data = request.get_json(silent=True) or {}
+    log.info("TRADOVATE WEBHOOK ← %s", data)
+
+    # Auth
+    url_secret  = request.args.get("secret", "")
+    body_secret = data.get("secret", "")
+    if url_secret != WEBHOOK_SECRET and body_secret != WEBHOOK_SECRET:
+        log.warning("Bad secret on /tradovate/webhook")
+        return jsonify({"error": "unauthorized"}), 403
+
+    for field in ["action", "symbol", "sl", "tp"]:
+        if field not in data:
+            return jsonify({"error": f"Missing field: {field}"}), 422
+
+    action = data["action"].lower()
+    symbol = str(data.get("symbol") or data.get("ticker", "NAS100")).upper()   # root symbol e.g. "MES"
+    sl     = float(data["sl"])
+    tp     = float(data["tp"])
+    entry  = float(data.get("entry", 0))
+
+    if action not in ("buy", "sell"):
+        return jsonify({"error": f"Unknown action: {action}"}), 422
+
+    if not TV_USER or not TV_PASS:
+        return jsonify({"error": "Tradovate credentials not configured on server"}), 503
+
+    def process():
+        try:
+            # Find front-month contract
+            contract_name, _ = _tv_find_contract(symbol)
+            if not contract_name:
+                log.error("Tradovate: contract not found for symbol '%s'", symbol)
+                return
+
+            # Position sizing: risk RISK_PCT% of balance
+            balance = _tv_get_balance()
+            point_val = tv_point_value(symbol)
+            sl_dist = abs((entry if entry else sl) - sl)
+            if sl_dist > 0 and balance > 0 and point_val > 0:
+                risk_dollars = balance * (RISK_PCT / 100.0)
+                qty = max(1, round(risk_dollars / (sl_dist * point_val)))
+            else:
+                qty = int(data.get("qty", 1))
+
+            log.info("Tradovate ORDER → %s %s x%d  SL=%.2f  TP=%.2f  balance=%.2f",
+                     action.upper(), contract_name, qty, sl, tp, balance)
+
+            result = _tv_place_order(contract_name, action, qty, sl, tp)
+            order_id = result.get("orderId") or result.get("id") or str(result)
+            log.info("✅  Tradovate %s %s x%d  order_id=%s", action.upper(), contract_name, qty, order_id)
+
+        except Exception as exc:
+            log.error("❌  Tradovate order error: %s", exc)
+            with _tv_lock:
+                global _tv_token
+                _tv_token = None   # force re-auth next time
+
+    threading.Thread(target=process, daemon=True).start()
+    return jsonify({"status": "received", "broker": "tradovate", "action": action, "symbol": symbol}), 200
 
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
-        "status":      "ok",
-        "service":     "tradelocker-bot",
-        "environment": ENVIRONMENT,
-        "server":      TL_SERVER,
-        "risk_pct":    RISK_PCT,
-        "point_value": POINT_VALUE,
+        "status":        "ok",
+        "service":       "tradelocker+tradovate-bot",
+        "environment":   ENVIRONMENT,
+        "server":        TL_SERVER,
+        "risk_pct":      RISK_PCT,
+        "tradovate":     "configured" if TV_USER else "not configured",
     }), 200
 
 
