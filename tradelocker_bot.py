@@ -280,7 +280,7 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     # Margin cap: never use more than 70% of available free margin (or 30% of equity as fallback).
     margin_per_lot = entry / 100.0
     if margin_per_lot > 0:
-        cap_amount = free_margin * 0.50 if free_margin and free_margin > 0 else balance * 0.30
+        cap_amount = free_margin * 0.25 if free_margin and free_margin > 0 else balance * 0.20
         max_lot_by_margin = round(cap_amount / margin_per_lot, 2)
         max_lot_by_margin = max(MIN_LOT, max_lot_by_margin)
         if lot > max_lot_by_margin:
