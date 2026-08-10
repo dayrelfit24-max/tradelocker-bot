@@ -280,7 +280,9 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     sl_distance = abs(entry - sl)
     if sl_distance == 0:
         return MIN_LOT
-    risk_dollars = balance * (pct / 100.0)
+    # Risk is always % of free margin (available funds), not total equity
+    risk_base = free_margin if free_margin and free_margin > 0 else balance
+    risk_dollars = risk_base * (pct / 100.0)
     lot = risk_dollars / (sl_distance * POINT_VALUE)
     lot = round(lot, 2)
     lot = max(MIN_LOT, min(MAX_LOT, lot))
@@ -295,8 +297,8 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
                      lot, max_lot_by_margin, free_margin or 0, cap_amount, margin_per_lot)
             lot = max_lot_by_margin
     log.info(
-        "Risk calc: balance=%.2f  free_margin=%s  risk=%.2f%%=%.2f  SL_dist=%.5f  → lot=%.2f",
-        balance, free_margin, pct, risk_dollars, sl_distance, lot,
+        "Risk calc: free_margin=%.2f  risk=%.2f%%=$%.2f  SL_dist=%.2f  → lot=%.2f",
+        risk_base, pct, risk_dollars, sl_distance, lot,
     )
     return lot
 
