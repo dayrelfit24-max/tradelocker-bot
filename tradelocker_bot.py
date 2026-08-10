@@ -259,6 +259,14 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     lot = risk_dollars / (sl_distance * POINT_VALUE)
     lot = round(lot, 2)
     lot = max(MIN_LOT, min(MAX_LOT, lot))
+    # Margin safety cap: margin per lot ≈ entry / leverage. Use 100x leverage, cap at 30% of balance.
+    margin_per_lot = entry / 100.0
+    if margin_per_lot > 0:
+        max_lot_by_margin = round((balance * 0.30) / margin_per_lot, 2)
+        max_lot_by_margin = max(MIN_LOT, max_lot_by_margin)
+        if lot > max_lot_by_margin:
+            log.info("Margin cap: reducing lot from %.2f to %.2f (balance=%.2f, margin/lot=%.2f)", lot, max_lot_by_margin, balance, margin_per_lot)
+            lot = max_lot_by_margin
     log.info(
         "Risk calc: balance=%.2f  risk=%.2f%%=%.2f  SL_dist=%.5f  point_val=%.2f  → lot=%.2f",
         balance, pct, risk_dollars, sl_distance, POINT_VALUE, lot,
