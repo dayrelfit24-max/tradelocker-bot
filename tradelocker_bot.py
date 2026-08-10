@@ -228,29 +228,42 @@ def get_tl():
             log.info("✅  TradeLocker connected!")
         return _tl
 
-def get_balance(tl, account_id: int | None = None) -> float | None:
-    """Try to get account balance from TLAPI. If account_id given, return that account's balance."""
+def get_balance(tl, account_id: int | None = None) -> tuple[float | None, float | None]:
+    """Return (equity, free_margin) for an account. free_margin may be None if not available."""
     try:
         accounts = tl.get_all_accounts()
         log.info("Accounts columns: %s", list(accounts.columns))
-        for col in ["accountBalance", "balance", "equity", "Balance", "Equity"]:
-            if col in accounts.columns:
-                if account_id and "id" in accounts.columns:
-                    row = accounts[accounts["id"] == account_id]
-                    if not row.empty:
-                        val = float(row[col].iloc[0])
-                        log.info("Account %s balance (%s): %.2f", account_id, col, val)
+
+        def _pick(row_or_df, cols):
+            for col in cols:
+                if col in row_or_df.columns if hasattr(row_or_df, "columns") else col in row_or_df.index:
+                    try:
+                        val = float(row_or_df[col].iloc[0] if hasattr(row_or_df[col], "iloc") else row_or_df[col])
                         return val
-                val = float(accounts[col].iloc[0])
-                log.info("Account balance (%s): %.2f", col, val)
-                return val
-        log.warning("Balance column not found. Available: %s", list(accounts.columns))
+                    except Exception:
+                        pass
+            return None
+
+        if account_id and "id" in accounts.columns:
+            row = accounts[accounts["id"] == account_id]
+            if row.empty:
+                row = accounts
+        else:
+            row = accounts
+
+        equity = _pick(row, ["accountBalance", "balance", "equity", "Balance", "Equity"])
+        free_m = _pick(row, ["freeMargin", "free_margin", "availableMargin", "available_margin",
+                              "marginAvailable", "availableFunds", "freeBalance"])
+        log.info("Account %s equity=%.2f free_margin=%s", account_id, equity or 0, free_m)
+        return equity, free_m
     except Exception as e:
         log.warning("Could not fetch balance: %s", e)
-    return None
+    return None, None
 
-def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | None = None) -> float:
-    """Calculate lot size based on % account risk. Uses risk_pct if provided, else config default."""
+def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | None = None,
+                  free_margin: float | None = None) -> float:
+    """Calculate lot size based on % account risk. Uses risk_pct if provided, else config default.
+    free_margin (if provided) is used for margin cap instead of total balance."""
     pct = risk_pct if risk_pct is not None else RISK_PCT
     sl_distance = abs(entry - sl)
     if sl_distance == 0:
@@ -259,17 +272,19 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     lot = risk_dollars / (sl_distance * POINT_VALUE)
     lot = round(lot, 2)
     lot = max(MIN_LOT, min(MAX_LOT, lot))
-    # Margin safety cap: margin per lot ≈ entry / leverage. Use 100x leverage, cap at 30% of balance.
+    # Margin cap: never use more than 70% of available free margin (or 30% of equity as fallback).
     margin_per_lot = entry / 100.0
     if margin_per_lot > 0:
-        max_lot_by_margin = round((balance * 0.30) / margin_per_lot, 2)
+        cap_amount = free_margin * 0.70 if free_margin and free_margin > 0 else balance * 0.30
+        max_lot_by_margin = round(cap_amount / margin_per_lot, 2)
         max_lot_by_margin = max(MIN_LOT, max_lot_by_margin)
         if lot > max_lot_by_margin:
-            log.info("Margin cap: reducing lot from %.2f to %.2f (balance=%.2f, margin/lot=%.2f)", lot, max_lot_by_margin, balance, margin_per_lot)
+            log.info("Margin cap: reducing lot %.2f → %.2f (free_margin=%.2f, cap=%.2f, margin/lot=%.2f)",
+                     lot, max_lot_by_margin, free_margin or 0, cap_amount, margin_per_lot)
             lot = max_lot_by_margin
     log.info(
-        "Risk calc: balance=%.2f  risk=%.2f%%=%.2f  SL_dist=%.5f  point_val=%.2f  → lot=%.2f",
-        balance, pct, risk_dollars, sl_distance, POINT_VALUE, lot,
+        "Risk calc: balance=%.2f  free_margin=%s  risk=%.2f%%=%.2f  SL_dist=%.5f  → lot=%.2f",
+        balance, free_margin, pct, risk_dollars, sl_distance, lot,
     )
     return lot
 
@@ -347,11 +362,11 @@ def webhook():
                         log.error("❌  Account %s not found in TradeLocker — skipping", acct_id)
                         continue
 
-                    balance = get_balance(tl, acct_id)
+                    balance, free_margin = get_balance(tl, acct_id)
                     if not balance or balance <= 0:
                         log.error("❌  Balance fetch failed for account %s — skipping", acct_id)
                         continue
-                    qty = calc_lot_size(balance, entry, sl, risk_pct=risk_pct_override)
+                    qty = calc_lot_size(balance, entry, sl, risk_pct=risk_pct_override, free_margin=free_margin)
 
                     log.info(
                         "ORDER [acct=%s] → %s %s x%.2f  entry=%.5f  sl=%.5f  tp=%.5f",
@@ -475,10 +490,10 @@ if __name__ == "__main__":
     else:
         try:
             tl = get_tl()
-            bal = get_balance(tl)
+            bal, fm = get_balance(tl)
             if bal:
-                log.info("Account balance: $%.2f  →  max risk per trade: $%.2f",
-                         bal, bal * RISK_PCT / 100)
+                log.info("Account balance: $%.2f  free_margin: %s  →  max risk per trade: $%.2f",
+                         bal, fm, bal * RISK_PCT / 100)
         except Exception as e:
             log.error("Startup error: %s", e)
 
