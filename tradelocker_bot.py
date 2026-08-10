@@ -53,6 +53,13 @@ _acct1 = cfg.get("TL_ACCOUNT_ID",   os.getenv("TL_ACCOUNT_ID",   ""))
 _acct2 = cfg.get("TL_ACCOUNT_ID_2", os.getenv("TL_ACCOUNT_ID_2", ""))
 TL_ACCOUNT_IDS = [int(a) for a in [_acct1, _acct2] if a.strip()]
 
+# Leverage per account — used to compute margin per lot (entry / leverage)
+_lev1 = int(cfg.get("TL_LEVERAGE_1", os.getenv("TL_LEVERAGE_1", "100")))
+_lev2 = int(cfg.get("TL_LEVERAGE_2", os.getenv("TL_LEVERAGE_2", "100")))
+TL_LEVERAGE_MAP: dict[int, int] = {}
+if _acct1.strip(): TL_LEVERAGE_MAP[int(_acct1)] = _lev1
+if _acct2.strip(): TL_LEVERAGE_MAP[int(_acct2)] = _lev2
+
 # ── Tradovate config ────────────────────────────────────────────────────────
 TV_USER    = cfg.get("TV_USERNAME", os.getenv("TV_USERNAME", ""))
 TV_PASS    = cfg.get("TV_PASSWORD", os.getenv("TV_PASSWORD", ""))
@@ -266,7 +273,7 @@ def get_balance(tl, account_id: int | None = None) -> tuple[float | None, float 
     return None, None
 
 def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | None = None,
-                  free_margin: float | None = None) -> float:
+                  free_margin: float | None = None, leverage: int = 100) -> float:
     """Calculate lot size based on % account risk. Uses risk_pct if provided, else config default.
     free_margin (if provided) is used for margin cap instead of total balance."""
     pct = risk_pct if risk_pct is not None else RISK_PCT
@@ -277,8 +284,8 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     lot = risk_dollars / (sl_distance * POINT_VALUE)
     lot = round(lot, 2)
     lot = max(MIN_LOT, min(MAX_LOT, lot))
-    # Margin cap: never use more than 70% of available free margin (or 30% of equity as fallback).
-    margin_per_lot = entry / 100.0
+    # Margin cap: never use more than 25% of available free margin (or 20% of equity as fallback).
+    margin_per_lot = entry / leverage
     if margin_per_lot > 0:
         cap_amount = free_margin * 0.25 if free_margin and free_margin > 0 else balance * 0.20
         max_lot_by_margin = round(cap_amount / margin_per_lot, 2)
@@ -371,7 +378,8 @@ def webhook():
                     if not balance or balance <= 0:
                         log.error("❌  Balance fetch failed for account %s — skipping", acct_id)
                         continue
-                    qty = calc_lot_size(balance, entry, sl, risk_pct=risk_pct_override, free_margin=free_margin)
+                    leverage = TL_LEVERAGE_MAP.get(acct_id, 100) if acct_id else 100
+                    qty = calc_lot_size(balance, entry, sl, risk_pct=risk_pct_override, free_margin=free_margin, leverage=leverage)
 
                     log.info(
                         "ORDER [acct=%s] → %s %s x%.2f  entry=%.5f  sl=%.5f  tp=%.5f",
