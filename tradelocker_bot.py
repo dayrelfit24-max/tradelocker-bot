@@ -229,35 +229,40 @@ def get_tl():
         return _tl
 
 def get_balance(tl, account_id: int | None = None) -> tuple[float | None, float | None]:
-    """Return (equity, free_margin) for an account. free_margin may be None if not available."""
+    """Return (equity, free_margin) for an account. Uses get_account_state for live free margin."""
     try:
-        accounts = tl.get_all_accounts()
-        log.info("Accounts columns: %s", list(accounts.columns))
-
-        def _pick(row_or_df, cols):
-            for col in cols:
-                if col in row_or_df.columns if hasattr(row_or_df, "columns") else col in row_or_df.index:
-                    try:
-                        val = float(row_or_df[col].iloc[0] if hasattr(row_or_df[col], "iloc") else row_or_df[col])
-                        return val
-                    except Exception:
-                        pass
-            return None
-
-        if account_id and "id" in accounts.columns:
-            row = accounts[accounts["id"] == account_id]
-            if row.empty:
-                row = accounts
-        else:
-            row = accounts
-
-        equity = _pick(row, ["accountBalance", "balance", "equity", "Balance", "Equity"])
-        free_m = _pick(row, ["freeMargin", "free_margin", "availableMargin", "available_margin",
-                              "marginAvailable", "availableFunds", "freeBalance"])
-        log.info("Account %s equity=%.2f free_margin=%s", account_id, equity or 0, free_m)
+        # get_account_state returns live state including free margin for the currently selected account
+        state = tl.get_account_state()
+        log.info("Account state keys: %s", list(state.keys()) if isinstance(state, dict) else state)
+        equity = None
+        free_m = None
+        if isinstance(state, dict):
+            for k in ["accountBalance", "balance", "equity", "Equity", "Balance"]:
+                if k in state:
+                    equity = float(state[k])
+                    break
+            for k in ["freemargin", "freeMargin", "free_margin", "availableMargin",
+                       "marginAvailable", "availableFunds", "freeBalance", "availableBalance"]:
+                if k in state:
+                    free_m = float(state[k])
+                    break
+        log.info("Account %s equity=%s free_margin=%s", account_id, equity, free_m)
         return equity, free_m
     except Exception as e:
-        log.warning("Could not fetch balance: %s", e)
+        log.warning("get_account_state failed (%s), falling back to get_all_accounts", e)
+
+    try:
+        accounts = tl.get_all_accounts()
+        row = accounts[accounts["id"] == account_id] if account_id and "id" in accounts.columns else accounts
+        if hasattr(row, "empty") and row.empty:
+            row = accounts
+        for col in ["accountBalance", "balance", "equity", "Balance", "Equity"]:
+            if col in accounts.columns:
+                equity = float(row[col].iloc[0])
+                log.info("Account %s equity=%.2f (fallback, no free_margin)", account_id, equity)
+                return equity, None
+    except Exception as e2:
+        log.warning("Could not fetch balance: %s", e2)
     return None, None
 
 def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | None = None,
@@ -275,7 +280,7 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     # Margin cap: never use more than 70% of available free margin (or 30% of equity as fallback).
     margin_per_lot = entry / 100.0
     if margin_per_lot > 0:
-        cap_amount = free_margin * 0.70 if free_margin and free_margin > 0 else balance * 0.10
+        cap_amount = free_margin * 0.70 if free_margin and free_margin > 0 else balance * 0.50
         max_lot_by_margin = round(cap_amount / margin_per_lot, 2)
         max_lot_by_margin = max(MIN_LOT, max_lot_by_margin)
         if lot > max_lot_by_margin:
