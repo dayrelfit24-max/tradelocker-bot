@@ -404,6 +404,27 @@ def webhook():
                     if order_id:
                         log.info("✅  [acct=%s] %s %s x%.2f  SL=%.5f  TP=%.5f  order_id=%s",
                                  acct_id, action.upper(), symbol, qty, sl, tp, order_id)
+                        # Fix TP to be exactly 3R from actual fill price
+                        try:
+                            import time as _time
+                            _time.sleep(1)  # brief wait for fill to register
+                            pos_id = tl.get_position_id_from_order_id(order_id)
+                            if pos_id:
+                                positions = tl.get_all_positions()
+                                pos_row = positions[positions["id"] == pos_id] if "id" in positions.columns else pd.DataFrame()
+                                fill_col = next((c for c in ["avgPrice", "price", "openPrice", "entryPrice"] if c in positions.columns), None)
+                                if not pos_row.empty and fill_col:
+                                    fill_price = float(pos_row[fill_col].iloc[0])
+                                    real_sl_dist = abs(fill_price - sl)
+                                    real_tp = round(fill_price + (3 * real_sl_dist), 2) if action == "buy" else round(fill_price - (3 * real_sl_dist), 2)
+                                    if abs(real_tp - tp) > 0.5:  # only modify if meaningfully different
+                                        ok = tl.modify_position(pos_id, {"takeProfit": real_tp, "takeProfitType": "absolute"})
+                                        log.info("🎯  [acct=%s] TP corrected fill=%.5f SL_dist=%.2f old_tp=%.5f → new_tp=%.5f (3R) ok=%s",
+                                                 acct_id, fill_price, real_sl_dist, tp, real_tp, ok)
+                                    else:
+                                        log.info("✅  [acct=%s] TP already accurate (fill=%.5f, tp=%.5f)", acct_id, fill_price, tp)
+                        except Exception as tp_err:
+                            log.warning("⚠️  [acct=%s] TP correction failed: %s", acct_id, tp_err)
                     else:
                         log.error("❌  [acct=%s] Order returned no ID", acct_id)
 
