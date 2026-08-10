@@ -319,7 +319,7 @@ def webhook():
         return jsonify({"error": "unauthorized"}), 403
 
     # Required fields
-    for field in ["action", "symbol", "entry", "sl", "tp"]:
+    for field in ["action", "symbol", "entry", "sl"]:
         if field not in data:
             return jsonify({"error": f"Missing field: {field}"}), 422
 
@@ -327,7 +327,9 @@ def webhook():
     symbol = str(data.get("symbol") or data.get("ticker", "NAS100")).upper()
     entry  = float(data["entry"])
     sl     = float(data["sl"])
-    tp     = float(data["tp"])
+    # Always use 3R take profit regardless of what TradingView sends
+    sl_dist = abs(entry - sl)
+    tp = round(entry + (3 * sl_dist), 2) if action == "buy" else round(entry - (3 * sl_dist), 2)
 
     if action not in ("buy", "sell"):
         return jsonify({"error": f"Unknown action: {action}"}), 422
