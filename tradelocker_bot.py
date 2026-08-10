@@ -42,15 +42,15 @@ TL_EMAIL        = cfg.get("TL_EMAIL",       os.getenv("TL_EMAIL", ""))
 TL_PASSWORD     = cfg.get("TL_PASSWORD",    os.getenv("TL_PASSWORD", ""))
 TL_SERVER       = cfg.get("TL_SERVER",      os.getenv("TL_SERVER", "HEROFX"))
 ENVIRONMENT     = cfg.get("TL_ENV",         "https://live.tradelocker.com")
-RISK_PCT        = float(cfg.get("RISK_PCT", "1.5"))     # % of balance to risk
-POINT_VALUE     = float(cfg.get("POINT_VALUE", "1.0"))  # USD per point per 1 lot
-MIN_LOT         = float(cfg.get("MIN_LOT",  "0.01"))
-MAX_LOT         = float(cfg.get("MAX_LOT",  "50.0"))
+RISK_PCT        = float(cfg.get("RISK_PCT",    os.getenv("RISK_PCT",    "1.5")))
+POINT_VALUE     = float(cfg.get("POINT_VALUE", os.getenv("POINT_VALUE", "1.0")))
+MIN_LOT         = float(cfg.get("MIN_LOT",     os.getenv("MIN_LOT",     "0.01")))
+MAX_LOT         = float(cfg.get("MAX_LOT",     os.getenv("MAX_LOT",     "1.0")))
 WEBHOOK_SECRET  = cfg.get("WEBHOOK_SECRET", os.getenv("WEBHOOK_SECRET", "tradelocker_dayrel_2026"))
 
 # All TradeLocker account IDs to trade on simultaneously
-_acct1 = cfg.get("TL_ACCOUNT_ID",   "")
-_acct2 = cfg.get("TL_ACCOUNT_ID_2", "")
+_acct1 = cfg.get("TL_ACCOUNT_ID",   os.getenv("TL_ACCOUNT_ID",   ""))
+_acct2 = cfg.get("TL_ACCOUNT_ID_2", os.getenv("TL_ACCOUNT_ID_2", ""))
 TL_ACCOUNT_IDS = [int(a) for a in [_acct1, _acct2] if a.strip()]
 
 # ── Tradovate config ────────────────────────────────────────────────────────
@@ -275,7 +275,7 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     # Margin cap: never use more than 70% of available free margin (or 30% of equity as fallback).
     margin_per_lot = entry / 100.0
     if margin_per_lot > 0:
-        cap_amount = free_margin * 0.70 if free_margin and free_margin > 0 else balance * 0.30
+        cap_amount = free_margin * 0.70 if free_margin and free_margin > 0 else balance * 0.10
         max_lot_by_margin = round(cap_amount / margin_per_lot, 2)
         max_lot_by_margin = max(MIN_LOT, max_lot_by_margin)
         if lot > max_lot_by_margin:
