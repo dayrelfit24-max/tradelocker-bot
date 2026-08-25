@@ -48,6 +48,8 @@ MIN_LOT         = float(cfg.get("MIN_LOT",     os.getenv("MIN_LOT",     "0.01"))
 MAX_LOT         = float(cfg.get("MAX_LOT",     os.getenv("MAX_LOT",     "1.0")))
 WEBHOOK_SECRET     = cfg.get("WEBHOOK_SECRET",    os.getenv("WEBHOOK_SECRET",    "tradelocker_dayrel_2026"))
 MAX_DAILY_DD_PCT   = float(cfg.get("MAX_DAILY_DD_PCT", os.getenv("MAX_DAILY_DD_PCT", "10.0")))
+NEWS_FILTER_ON     = cfg.get("NEWS_FILTER", os.getenv("NEWS_FILTER", "true")).lower() == "true"
+NEWS_WINDOW_MIN    = int(cfg.get("NEWS_WINDOW_MIN", os.getenv("NEWS_WINDOW_MIN", "30")))
 
 # All TradeLocker account IDs to trade on simultaneously
 _acct1 = cfg.get("TL_ACCOUNT_ID",   os.getenv("TL_ACCOUNT_ID",   ""))
@@ -303,6 +305,68 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     )
     return lot
 
+# ── News filter ────────────────────────────────────────────────────────────
+# Uses Forex Factory's public weekly calendar JSON.
+# Skips trades within NEWS_WINDOW_MIN minutes before or after any High-impact event.
+_news_cache: dict = {"data": [], "fetched_day": None}
+_news_lock  = threading.Lock()
+FF_CALENDAR = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+
+def _fetch_news_calendar() -> list:
+    try:
+        r = _requests.get(FF_CALENDAR, timeout=10,
+                          headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        log.warning("⚠️  News calendar fetch failed: %s", e)
+        return []
+
+def _get_high_impact_events() -> list:
+    today = datetime.date.today()
+    with _news_lock:
+        if _news_cache["fetched_day"] != today:
+            _news_cache["data"]        = _fetch_news_calendar()
+            _news_cache["fetched_day"] = today
+            log.info("📰 News calendar refreshed: %d events", len(_news_cache["data"]))
+        return _news_cache["data"]
+
+def is_near_high_impact_news() -> bool:
+    """Return True (and block trade) if within NEWS_WINDOW_MIN of a High-impact event."""
+    if not NEWS_FILTER_ON:
+        return False
+    events = _get_high_impact_events()
+    if not events:
+        return False
+    now = datetime.datetime.utcnow()
+    window = datetime.timedelta(minutes=NEWS_WINDOW_MIN)
+    for ev in events:
+        if str(ev.get("impact", "")).lower() != "high":
+            continue
+        date_str = ev.get("date") or ev.get("time") or ""
+        if not date_str:
+            continue
+        try:
+            # FF format: "2024-08-25T12:30:00-04:00" or similar ISO
+            ev_time = datetime.datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            # Convert to UTC for comparison
+            if ev_time.tzinfo:
+                import calendar as _cal
+                ev_utc = datetime.datetime.utcfromtimestamp(
+                    _cal.timegm(ev_time.utctimetuple()))
+            else:
+                ev_utc = ev_time
+            diff = abs((now - ev_utc).total_seconds()) / 60
+            if diff <= NEWS_WINDOW_MIN:
+                log.warning(
+                    "🚫 NEWS BLOCK: '%s' (%s) is %.0f min away — skipping trade.",
+                    ev.get("title", "?"), ev.get("country", "?"), diff,
+                )
+                return True
+        except Exception:
+            continue
+    return False
+
 # ── Daily drawdown guard ───────────────────────────────────────────────────
 # Tracks starting equity per account per calendar day.
 # If equity drops >= MAX_DAILY_DD_PCT from the day's open, block all new trades.
@@ -452,6 +516,11 @@ def webhook():
                 for _, row in all_accounts.iterrows():
                     acct_map[int(row["id"])] = int(row["accNum"])
             log.info("Account map: %s", acct_map)
+
+            # ── News filter — block trades near high-impact events ─────────
+            if is_near_high_impact_news():
+                log.warning("🚫 Trade blocked by news filter.")
+                return
 
             # ── Place order on every configured account ────────────────────
             account_ids = TL_ACCOUNT_IDS if TL_ACCOUNT_IDS else [None]
