@@ -9,7 +9,7 @@ Endpoints:
 Health  : GET  /health
 """
 
-import os, logging, threading, time
+import os, logging, threading, time, datetime
 import requests as _requests
 from flask import Flask, request, jsonify
 
@@ -46,7 +46,8 @@ RISK_PCT        = float(cfg.get("RISK_PCT",    os.getenv("RISK_PCT",    "1.5")))
 POINT_VALUE     = float(cfg.get("POINT_VALUE", os.getenv("POINT_VALUE", "1.0")))
 MIN_LOT         = float(cfg.get("MIN_LOT",     os.getenv("MIN_LOT",     "0.01")))
 MAX_LOT         = float(cfg.get("MAX_LOT",     os.getenv("MAX_LOT",     "1.0")))
-WEBHOOK_SECRET  = cfg.get("WEBHOOK_SECRET", os.getenv("WEBHOOK_SECRET", "tradelocker_dayrel_2026"))
+WEBHOOK_SECRET     = cfg.get("WEBHOOK_SECRET",    os.getenv("WEBHOOK_SECRET",    "tradelocker_dayrel_2026"))
+MAX_DAILY_DD_PCT   = float(cfg.get("MAX_DAILY_DD_PCT", os.getenv("MAX_DAILY_DD_PCT", "10.0")))
 
 # All TradeLocker account IDs to trade on simultaneously
 _acct1 = cfg.get("TL_ACCOUNT_ID",   os.getenv("TL_ACCOUNT_ID",   ""))
@@ -302,6 +303,92 @@ def calc_lot_size(balance: float, entry: float, sl: float, risk_pct: float | Non
     )
     return lot
 
+# ── Daily drawdown guard ───────────────────────────────────────────────────
+# Tracks starting equity per account per calendar day.
+# If equity drops >= MAX_DAILY_DD_PCT from the day's open, block all new trades.
+_daily_dd: dict[int, dict] = {}   # {acct_id: {"date": date, "start": float}}
+_dd_lock  = threading.Lock()
+
+def check_daily_drawdown(acct_id: int, current_equity: float) -> bool:
+    """Return True if OK to trade, False if daily drawdown limit hit."""
+    today = datetime.date.today()
+    with _dd_lock:
+        rec = _daily_dd.get(acct_id)
+        if rec is None or rec["date"] != today:
+            _daily_dd[acct_id] = {"date": today, "start": current_equity}
+            log.info("📅 [acct=%s] New day — starting equity $%.2f", acct_id, current_equity)
+            return True
+        start = rec["start"]
+        dd_pct = (start - current_equity) / start * 100 if start > 0 else 0
+        if dd_pct >= MAX_DAILY_DD_PCT:
+            log.warning(
+                "🛑 [acct=%s] Daily drawdown limit reached: down %.2f%% "
+                "(start=$%.2f now=$%.2f limit=%.0f%%) — no more trades today.",
+                acct_id, dd_pct, start, current_equity, MAX_DAILY_DD_PCT,
+            )
+            return False
+        log.info("✅ [acct=%s] Drawdown OK: %.2f%% used of %.0f%% limit", acct_id, dd_pct, MAX_DAILY_DD_PCT)
+        return True
+
+# ── Trailing stop — move to breakeven at 1R profit ─────────────────────────
+def _monitor_trailing_stop(tl_getter, acct_id: int, pos_id, fill_price: float,
+                           sl: float, action: str):
+    """Background thread: polls the position every 30 s and moves SL to
+    breakeven (fill_price) the first time unrealised P&L reaches 1R."""
+    sl_dist    = abs(fill_price - sl)
+    if sl_dist == 0:
+        return
+    target_1r  = fill_price + sl_dist if action == "buy" else fill_price - sl_dist
+    breakeven  = fill_price
+
+    log.info("🔍 [acct=%s pos=%s] Trail monitor started — 1R target=%.5f breakeven=%.5f",
+             acct_id, pos_id, target_1r, breakeven)
+
+    for _ in range(240):          # max 2 hours (30 s × 240)
+        time.sleep(30)
+        try:
+            tl        = tl_getter()
+            positions = tl.get_all_positions()
+            if "id" not in positions.columns:
+                continue
+            pos_row = positions[positions["id"] == pos_id]
+            if pos_row.empty:
+                log.info("✅ [acct=%s pos=%s] Position closed — trail monitor done.", acct_id, pos_id)
+                return
+
+            # If SL was already moved externally, stop watching
+            sl_col = next((c for c in ["sl", "stopLoss", "stop_loss"] if c in positions.columns), None)
+            if sl_col:
+                cur_sl = float(pos_row[sl_col].iloc[0])
+                already_moved = (action == "buy"  and cur_sl >= breakeven - 0.5) or \
+                                (action == "sell" and cur_sl <= breakeven + 0.5)
+                if already_moved:
+                    log.info("✅ [acct=%s pos=%s] SL already at/past breakeven — done.", acct_id, pos_id)
+                    return
+
+            # Check current mark price
+            price_col = next(
+                (c for c in ["currentPrice", "markPrice", "price", "bid", "ask"] if c in positions.columns),
+                None,
+            )
+            if not price_col:
+                continue
+            cur_price = float(pos_row[price_col].iloc[0])
+
+            hit_1r = (action == "buy"  and cur_price >= target_1r) or \
+                     (action == "sell" and cur_price <= target_1r)
+
+            if hit_1r:
+                ok = tl.modify_position(pos_id, {"stopLoss": breakeven, "stopLossType": "absolute"})
+                log.info("🎯 [acct=%s pos=%s] 1R reached (price=%.5f) — SL moved to breakeven=%.5f ok=%s",
+                         acct_id, pos_id, cur_price, breakeven, ok)
+                return   # done — SL is now at breakeven
+
+        except Exception as err:
+            log.warning("⚠️  [acct=%s pos=%s] Trail monitor error: %s", acct_id, pos_id, err)
+
+    log.info("⏱  [acct=%s pos=%s] Trail monitor timed out.", acct_id, pos_id)
+
 # ── Flask app ──────────────────────────────────────────────────────────────
 app = Flask(__name__)
 
@@ -382,6 +469,11 @@ def webhook():
                     if not balance or balance <= 0:
                         log.error("❌  Balance fetch failed for account %s — skipping", acct_id)
                         continue
+
+                    # ── Daily drawdown guard ───────────────────────────────
+                    if not check_daily_drawdown(acct_id, balance):
+                        continue   # limit hit — skip this account today
+
                     leverage = TL_LEVERAGE_MAP.get(acct_id, 100) if acct_id else 100
                     qty = calc_lot_size(balance, entry, sl, risk_pct=risk_pct_override, free_margin=free_margin, leverage=leverage)
 
@@ -425,6 +517,30 @@ def webhook():
                                         log.info("✅  [acct=%s] TP already accurate (fill=%.5f, tp=%.5f)", acct_id, fill_price, tp)
                         except Exception as tp_err:
                             log.warning("⚠️  [acct=%s] TP correction failed: %s", acct_id, tp_err)
+
+                        # ── Trailing stop — move SL to breakeven at 1R ────
+                        try:
+                            _time.sleep(0.5)
+                            pos_id_trail = tl.get_position_id_from_order_id(order_id)
+                            if pos_id_trail:
+                                # Determine fill price (reuse pos fetch if available)
+                                trail_fill = entry   # fallback to signal entry
+                                try:
+                                    positions2 = tl.get_all_positions()
+                                    pr = positions2[positions2["id"] == pos_id_trail] if "id" in positions2.columns else None
+                                    fc = next((c for c in ["avgPrice", "price", "openPrice", "entryPrice"] if pr is not None and c in positions2.columns), None)
+                                    if pr is not None and not pr.empty and fc:
+                                        trail_fill = float(pr[fc].iloc[0])
+                                except Exception:
+                                    pass
+                                threading.Thread(
+                                    target=_monitor_trailing_stop,
+                                    args=(get_tl, acct_id, pos_id_trail, trail_fill, sl, action),
+                                    daemon=True,
+                                ).start()
+                                log.info("🔍 [acct=%s] Trail monitor launched for pos %s", acct_id, pos_id_trail)
+                        except Exception as trail_err:
+                            log.warning("⚠️  [acct=%s] Trail monitor launch failed: %s", acct_id, trail_err)
                     else:
                         log.error("❌  [acct=%s] Order returned no ID", acct_id)
 
