@@ -323,6 +323,7 @@ tbody td{padding:10px 14px;font-size:12.5px;white-space:nowrap}
             <th onclick="sortBy('exit')">Exit</th>
             <th onclick="sortBy('size')">Size</th>
             <th onclick="sortBy('pnl')">P&amp;L</th>
+            <th onclick="sortBy('strategy')">Strategy</th>
             <th>Broker</th>
           </tr>
         </thead>
@@ -749,7 +750,7 @@ function renderTradeTable() {
   const slice=visibleTrades.slice(start,start+S.pageSize);
   const tbody=document.getElementById('trade-tbody');
   if(!slice.length){
-    tbody.innerHTML=`<tr><td colspan="8"><div class="empty-state"><p>No trades in this period</p></div></td></tr>`;
+    tbody.innerHTML=`<tr><td colspan="9"><div class="empty-state"><p>No trades in this period</p></div></td></tr>`;
   } else {
     tbody.innerHTML=slice.map(t=>{
       const pnl=+t.pnl||0;
@@ -765,6 +766,7 @@ function renderTradeTable() {
         <td style="color:var(--text2)">${fmtPrice(t.exit)}</td>
         <td style="color:var(--text2)">${t.size??'—'}</td>
         <td class="${pnlCls}">${pnlStr}</td>
+        <td style="color:var(--text2);font-size:11px">${t.strategy||'—'}</td>
         <td><span class="badge ${brkCls}">${t.broker==='TradeLocker'?'TL':t.broker==='TakeProfitTrader'?'TPT':'TV'}</span></td>
       </tr>`;
     }).join('');
