@@ -9,7 +9,7 @@ Endpoints:
 Health  : GET  /health
 """
 
-import os, logging, threading, time, datetime
+import os, csv, logging, threading, time, datetime
 import requests as _requests
 from flask import Flask, request, jsonify
 
@@ -92,6 +92,32 @@ def tv_point_value(root: str) -> float:
         if root.upper().startswith(prefix):
             return val
     return 1.0
+
+# ── Trade Journal ──────────────────────────────────────────────────────────
+_journal_file = os.path.join(_script_dir, "trades_journal.csv")
+_journal_lock = threading.Lock()
+_JOURNAL_HEADERS = ["timestamp", "symbol", "action", "strategy", "entry", "sl", "tp", "qty", "account_id", "order_id"]
+
+def journal_log(symbol, action, strategy, entry, sl, tp, qty, account_id, order_id):
+    row = {
+        "timestamp":  datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "symbol":     symbol,
+        "action":     action,
+        "strategy":   strategy,
+        "entry":      entry,
+        "sl":         sl,
+        "tp":         tp,
+        "qty":        qty,
+        "account_id": account_id,
+        "order_id":   order_id,
+    }
+    with _journal_lock:
+        write_header = not os.path.exists(_journal_file)
+        with open(_journal_file, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=_JOURNAL_HEADERS)
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
 
 # ── Logging ────────────────────────────────────────────────────────────────
 _log_file = os.path.join(_script_dir, "bot.log")
@@ -474,8 +500,9 @@ def webhook():
         if field not in data:
             return jsonify({"error": f"Missing field: {field}"}), 422
 
-    action = data["action"].lower()
-    symbol = str(data.get("symbol") or data.get("ticker", "NAS100")).upper()
+    action   = data["action"].lower()
+    symbol   = str(data.get("symbol") or data.get("ticker", "NAS100")).upper()
+    strategy = str(data.get("strategy", "unknown"))
     entry  = float(data["entry"])
     sl     = float(data["sl"])
     # Always use 3R take profit regardless of what TradingView sends
@@ -565,6 +592,7 @@ def webhook():
                     if order_id:
                         log.info("✅  [acct=%s] %s %s x%.2f  SL=%.5f  TP=%.5f  order_id=%s",
                                  acct_id, action.upper(), symbol, qty, sl, tp, order_id)
+                        journal_log(symbol, action, strategy, entry, sl, tp, qty, acct_id, order_id)
                         # Fix TP to be exactly 3R from actual fill price
                         try:
                             import time as _time
