@@ -4,15 +4,31 @@ Fetch TradeLocker closed trades via ordersHistory endpoint.
 Groups by positionId — uses TradeLocker's own position matching (not manual FIFO).
 Credentials are read from ~/tradelocker-bot/config.env — never hardcoded.
 """
-import json, requests, hashlib
+import csv, json, requests, hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict
 
 # ── Config ─────────────────────────────────────────────────────────────────
-CONFIG = Path.home() / "tradelocker-bot" / "config.env"
-OUT    = Path.home() / "tradelocker-bot" / "tradelocker_trades.json"
-BASE   = "https://live.tradelocker.com/backend-api"
+CONFIG  = Path.home() / "tradelocker-bot" / "config.env"
+OUT     = Path.home() / "tradelocker-bot" / "tradelocker_trades.json"
+JOURNAL = Path.home() / "tradelocker-bot" / "trades_journal.csv"
+BASE    = "https://live.tradelocker.com/backend-api"
+
+def load_journal_strategy(symbol, action, entry_price):
+    """Look up strategy from trades_journal.csv by symbol+action+entry."""
+    try:
+        if not JOURNAL.exists():
+            return "unknown"
+        with open(JOURNAL, newline="") as f:
+            for row in csv.DictReader(f):
+                if (row.get("symbol","").upper() == symbol.upper()
+                        and row.get("action","").lower() == action.lower()
+                        and abs(float(row.get("entry", 0)) - entry_price) < 0.5):
+                    return row.get("strategy", "unknown")
+    except Exception:
+        pass
+    return "unknown"
 
 def load_env(path):
     env = {}
@@ -298,25 +314,6 @@ for pos_id, orders in by_position.items():
         except: return 0
     orders.sort(key=get_ts)
 
-    buys  = [o for o in orders if str(col(o, "side") or "").lower() == "buy"]
-    sells = [o for o in orders if str(col(o, "side") or "").lower() == "sell"]
-
-    if not buys or not sells:
-        continue  # open or one-sided
-
-    # Use tradableInstrumentId from first order
-    tid         = col(orders[0], "tradableInstrumentId")
-    # Get a price hint from the first filled order to help detect symbol
-    price_hint  = (col(orders[0], "averageFillPrice") or
-                   col(orders[0], "price") or
-                   col(orders[0], "filledPrice"))
-    symbol = get_symbol(tid, price_hint)
-    mult   = get_mult(symbol)
-
-    # Determine direction from which side came first
-    first_ts  = get_ts(orders[0])
-    first_side = str(col(orders[0], "side") or "").lower()
-
     def avg_price(row):
         p = col(row, "averageFillPrice") or col(row, "filledPrice") or col(row, "price")
         try: return float(p)
@@ -327,14 +324,36 @@ for pos_id, orders in by_position.items():
         try: return float(q)
         except: return 0.0
 
-    if first_side == "buy":
-        direction = "Long"
-        openers   = buys
-        closers   = sells
-    else:
-        direction = "Short"
-        openers   = sells
-        closers   = buys
+    def is_reducing(r):
+        v = col(r, "isReducing")
+        if v is None:
+            return False
+        return str(v).lower() in ("true", "1", "yes")
+
+    # Split by isReducing first (most reliable)
+    openers = [o for o in orders if not is_reducing(o)]
+    closers = [o for o in orders if is_reducing(o)]
+
+    # Fallback to buy/sell pairing when isReducing not set
+    if not openers or not closers:
+        buys  = [o for o in orders if str(col(o, "side") or "").lower() == "buy"]
+        sells = [o for o in orders if str(col(o, "side") or "").lower() == "sell"]
+        if not buys or not sells:
+            continue  # open or one-sided
+        first_side = str(col(orders[0], "side") or "").lower()
+        if first_side == "buy":
+            openers, closers = buys, sells
+        else:
+            openers, closers = sells, buys
+
+    # Use tradableInstrumentId from first order
+    tid        = col(orders[0], "tradableInstrumentId")
+    price_hint = avg_price(orders[0])
+    symbol = get_symbol(tid, price_hint)
+    mult   = get_mult(symbol)
+
+    first_side = str(col(openers[0], "side") or "").lower()
+    direction  = "Long" if first_side == "buy" else "Short"
 
     # Weighted-average entry across ALL opening orders
     total_open_qty = sum(filled_qty(o) for o in openers)
@@ -384,7 +403,7 @@ for pos_id, orders in by_position.items():
             "pnl":        pnl,
             "date":       open_ts,
             "exitTime":   close_ts,
-            "strategy":   "WR + EMA",
+            "strategy":   load_journal_strategy(symbol, "buy" if direction == "Long" else "sell", entry_price),
             "source":     "api",
         })
 

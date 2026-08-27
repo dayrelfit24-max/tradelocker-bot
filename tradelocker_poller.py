@@ -65,7 +65,7 @@ SERVER   = cfg.get("TL_SERVER", "HEROFX")
 ACC_ID   = cfg.get("TL_ACCOUNT_ID", "")
 
 # ── Multipliers / symbol detection ────────────────────────────────────────────
-MULT = {"US30": 1.0, "NAS100": 1.0, "XAUUSD": 100.0, "BTCUSD": 1.0, "ETHUSD": 1.0, "EURUSD": 100000.0}
+MULT = {"US30": 1.0, "NAS100": 1.0, "XAUUSD": 1.0, "BTCUSD": 1.0, "ETHUSD": 1.0, "EURUSD": 1.0}
 
 def get_mult(sym):
     for k, v in MULT.items():
@@ -228,6 +228,25 @@ def save_trade(trade):
     print(msg, flush=True)
     return True
 
+# ── Fetch ALL orders for a specific positionId (to find opener) ──────────────
+def fetch_orders_for_position(pos_id):
+    """Fetch all filled orders for a positionId from full history (no cursor)."""
+    try:
+        resp = requests.get(
+            f"{BASE}/trade/accounts/{_acc_id}/ordersHistory",
+            headers=_th, timeout=30
+        )
+        body = resp.json()
+        if body.get("s") != "ok":
+            return []
+        rows = body.get("d", {}).get("ordersHistory", [])
+        return [r for r in rows
+                if str(col(r, "positionId")) == str(pos_id)
+                and str(col(r, "status") or "").lower() == "filled"]
+    except Exception as e:
+        log.warning(f"fetch_orders_for_position({pos_id}) error: {e}")
+        return []
+
 # ── Fetch only NEW orders (using timestamp cursor) ───────────────────────────
 def fetch_new_orders(since_ts_ms):
     """Fetch filled orders newer than since_ts_ms. Returns (orders, newest_ts)."""
@@ -294,21 +313,6 @@ def build_trades_from_orders(filled):
             except: return 0
 
         orders.sort(key=get_ts)
-        buys  = [o for o in orders if str(col(o, "side") or "").lower() == "buy"]
-        sells = [o for o in orders if str(col(o, "side") or "").lower() == "sell"]
-
-        if not buys or not sells:
-            continue  # still open
-
-        tid   = col(orders[0], "tradableInstrumentId")
-        price_hint = (col(orders[0], "averageFillPrice") or
-                      col(orders[0], "price"))
-        symbol    = get_symbol(tid, price_hint)
-
-        first_side = str(col(orders[0], "side") or "").lower()
-        direction  = "Long" if first_side == "buy" else "Short"
-        opener     = buys[0] if direction == "Long" else sells[0]
-        closers    = sells if direction == "Long" else buys
 
         def avg_price(row):
             p = col(row, "averageFillPrice") or col(row, "filledPrice") or col(row, "price")
@@ -319,6 +323,42 @@ def build_trades_from_orders(filled):
             q = col(row, "filledQty") or col(row, "qty")
             try: return float(q)
             except: return 0.0
+
+        def is_reducing(r):
+            v = col(r, "isReducing")
+            if v is None:
+                return False
+            return str(v).lower() in ("true", "1", "yes")
+
+        # Split into openers (non-reducing) and closers (reducing)
+        openers = [o for o in orders if not is_reducing(o)]
+        closers = [o for o in orders if is_reducing(o)]
+
+        # If we only see closers (opener is outside the cursor window), fetch full history
+        if not openers and closers:
+            all_orders = fetch_orders_for_position(pos_id)
+            openers = [o for o in all_orders if not is_reducing(o)]
+            closers = [o for o in all_orders if is_reducing(o)]
+
+        # Fallback: if isReducing not set, use buy/sell pairing
+        if not openers or not closers:
+            buys  = [o for o in orders if str(col(o, "side") or "").lower() == "buy"]
+            sells = [o for o in orders if str(col(o, "side") or "").lower() == "sell"]
+            if not buys or not sells:
+                continue  # position still open
+            first_side = str(col(orders[0], "side") or "").lower()
+            if first_side == "buy":
+                openers, closers = buys, sells
+            else:
+                openers, closers = sells, buys
+
+        opener = openers[0]
+        opener_side = str(col(opener, "side") or "").lower()
+        direction   = "Long" if opener_side == "buy" else "Short"
+
+        tid        = col(orders[0], "tradableInstrumentId")
+        price_hint = avg_price(orders[0])
+        symbol     = get_symbol(tid, price_hint)
 
         entry_price = avg_price(opener)
         open_ts     = parse_ts(get_ts(opener))
