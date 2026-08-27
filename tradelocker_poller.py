@@ -29,17 +29,47 @@ BASE     = "https://live.tradelocker.com/backend-api"
 POLL     = 60    # seconds between checks
 REAUTH   = 3300  # re-auth every 55 min
 
+RAILWAY_URL    = "https://web-production-c41f5.up.railway.app"
+RAILWAY_SECRET = "tradelocker_dayrel_2026"
+
+_journal_rows  = None  # cached per run
+
+def _load_journal_rows():
+    global _journal_rows
+    if _journal_rows is not None:
+        return _journal_rows
+    rows = []
+    if JOURNAL.exists():
+        try:
+            with open(JOURNAL, newline="") as f:
+                rows = list(csv.DictReader(f))
+        except Exception:
+            pass
+    if not rows:
+        try:
+            import urllib.request
+            url = f"{RAILWAY_URL}/journal/csv?secret={RAILWAY_SECRET}"
+            with urllib.request.urlopen(url, timeout=10) as r:
+                content = r.read().decode()
+            rows = list(csv.DictReader(content.splitlines()))
+        except Exception:
+            pass
+    _journal_rows = rows
+    return rows
+
+def _refresh_journal_rows():
+    """Force re-fetch from Railway on next call (call after each poll cycle)."""
+    global _journal_rows
+    _journal_rows = None
+
 def load_journal_strategy(symbol, action, entry_price):
-    """Return strategy name from trades_journal.csv matching symbol+action+entry, or 'unknown'."""
+    """Return strategy from journal CSV (local or Railway) matching symbol+action+entry."""
     try:
-        if not JOURNAL.exists():
-            return "unknown"
-        with open(JOURNAL, newline="") as f:
-            for row in csv.DictReader(f):
-                if (row.get("symbol","").upper() == symbol.upper()
-                        and row.get("action","").lower() == action.lower()
-                        and abs(float(row.get("entry", 0)) - entry_price) < 0.5):
-                    return row.get("strategy", "unknown")
+        for row in _load_journal_rows():
+            if (row.get("symbol","").upper() == symbol.upper()
+                    and row.get("action","").lower() == action.lower()
+                    and abs(float(row.get("entry", 0)) - entry_price) < 0.5):
+                return row.get("strategy", "unknown")
     except Exception:
         pass
     return "unknown"
@@ -482,6 +512,7 @@ def run():
                 subprocess.Popen([sys.executable, str(INJECT)],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+        _refresh_journal_rows()  # re-fetch strategy lookup on next cycle
         time.sleep(POLL)
 
 if __name__ == "__main__":

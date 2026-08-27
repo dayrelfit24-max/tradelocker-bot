@@ -718,6 +718,20 @@ def tradovate_webhook():
     return jsonify({"status": "received", "broker": "tradovate", "action": action, "symbol": symbol}), 200
 
 
+@app.route("/journal/csv", methods=["GET"])
+def journal_csv():
+    """Serve the trades_journal.csv so the local poller can look up strategies."""
+    secret = request.args.get("secret", "")
+    if secret != WEBHOOK_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+    if not os.path.exists(_journal_file):
+        return "", 204  # no content yet
+    with open(_journal_file, "r") as f:
+        content = f.read()
+    from flask import Response
+    return Response(content, mimetype="text/csv")
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({

@@ -15,17 +15,44 @@ OUT     = Path.home() / "tradelocker-bot" / "tradelocker_trades.json"
 JOURNAL = Path.home() / "tradelocker-bot" / "trades_journal.csv"
 BASE    = "https://live.tradelocker.com/backend-api"
 
+RAILWAY_URL    = "https://web-production-c41f5.up.railway.app"
+RAILWAY_SECRET = "tradelocker_dayrel_2026"
+
+_journal_rows = None  # cached after first load
+
+def _load_journal_rows():
+    global _journal_rows
+    if _journal_rows is not None:
+        return _journal_rows
+    rows = []
+    # Try local file first
+    if JOURNAL.exists():
+        try:
+            with open(JOURNAL, newline="") as f:
+                rows = list(csv.DictReader(f))
+        except Exception:
+            pass
+    # Fall back to Railway endpoint
+    if not rows:
+        try:
+            import urllib.request
+            url = f"{RAILWAY_URL}/journal/csv?secret={RAILWAY_SECRET}"
+            with urllib.request.urlopen(url, timeout=10) as r:
+                content = r.read().decode()
+            rows = list(csv.DictReader(content.splitlines()))
+        except Exception:
+            pass
+    _journal_rows = rows
+    return rows
+
 def load_journal_strategy(symbol, action, entry_price):
-    """Look up strategy from trades_journal.csv by symbol+action+entry."""
+    """Look up strategy from trades_journal.csv (local or Railway) by symbol+action+entry."""
     try:
-        if not JOURNAL.exists():
-            return "unknown"
-        with open(JOURNAL, newline="") as f:
-            for row in csv.DictReader(f):
-                if (row.get("symbol","").upper() == symbol.upper()
-                        and row.get("action","").lower() == action.lower()
-                        and abs(float(row.get("entry", 0)) - entry_price) < 0.5):
-                    return row.get("strategy", "unknown")
+        for row in _load_journal_rows():
+            if (row.get("symbol","").upper() == symbol.upper()
+                    and row.get("action","").lower() == action.lower()
+                    and abs(float(row.get("entry", 0)) - entry_price) < 0.5):
+                return row.get("strategy", "unknown")
     except Exception:
         pass
     return "unknown"
