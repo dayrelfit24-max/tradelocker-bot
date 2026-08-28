@@ -94,9 +94,50 @@ def tv_point_value(root: str) -> float:
     return 1.0
 
 # ── Trade Journal ──────────────────────────────────────────────────────────
+# Entries are persisted to a GitHub Gist so they survive Railway redeploys.
+# Fallback: also write to local file so /journal/csv still works instantly.
 _journal_file = os.path.join(_script_dir, "trades_journal.csv")
 _journal_lock = threading.Lock()
 _JOURNAL_HEADERS = ["timestamp", "symbol", "action", "strategy", "entry", "sl", "tp", "qty", "account_id", "order_id"]
+
+GIST_TOKEN = cfg.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
+GIST_ID    = cfg.get("JOURNAL_GIST_ID", os.getenv("JOURNAL_GIST_ID", ""))
+GIST_FILE  = "trades_journal.csv"
+
+def _gist_read() -> str:
+    """Fetch current Gist content; returns empty string on failure."""
+    if not GIST_TOKEN or not GIST_ID:
+        return ""
+    try:
+        r = _requests.get(
+            f"https://api.github.com/gists/{GIST_ID}",
+            headers={"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+            timeout=10,
+        )
+        return r.json().get("files", {}).get(GIST_FILE, {}).get("content", "")
+    except Exception:
+        return ""
+
+def _gist_write(content: str):
+    """Overwrite Gist file with content; silently ignores errors."""
+    if not GIST_TOKEN or not GIST_ID:
+        return
+    try:
+        _requests.patch(
+            f"https://api.github.com/gists/{GIST_ID}",
+            json={"files": {GIST_FILE: {"content": content}}},
+            headers={"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+def _load_gist_into_local():
+    """On startup, pull Gist → local file so local cache is warm."""
+    content = _gist_read()
+    if content:
+        with open(_journal_file, "w", newline="") as f:
+            f.write(content)
 
 def journal_log(symbol, action, strategy, entry, sl, tp, qty, account_id, order_id):
     row = {
@@ -112,12 +153,17 @@ def journal_log(symbol, action, strategy, entry, sl, tp, qty, account_id, order_
         "order_id":   order_id,
     }
     with _journal_lock:
+        # Write to local file
         write_header = not os.path.exists(_journal_file)
         with open(_journal_file, "a", newline="") as f:
             w = csv.DictWriter(f, fieldnames=_JOURNAL_HEADERS)
             if write_header:
                 w.writeheader()
             w.writerow(row)
+        # Persist to Gist
+        if GIST_TOKEN and GIST_ID:
+            with open(_journal_file, "r") as f:
+                _gist_write(f.read())
 
 # ── Logging ────────────────────────────────────────────────────────────────
 _log_file = os.path.join(_script_dir, "bot.log")
@@ -130,6 +176,12 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(), _file_handler],
 )
 log = logging.getLogger(__name__)
+
+# Warm local journal cache from Gist on startup (works under gunicorn too)
+try:
+    _load_gist_into_local()
+except Exception:
+    pass
 
 # ── Tradovate client ───────────────────────────────────────────────────────
 _tv_token      = None
@@ -721,14 +773,18 @@ def tradovate_webhook():
 @app.route("/journal/csv", methods=["GET"])
 def journal_csv():
     """Serve the trades_journal.csv so the local poller can look up strategies."""
+    from flask import Response
     secret = request.args.get("secret", "")
     if secret != WEBHOOK_SECRET:
         return jsonify({"error": "unauthorized"}), 403
-    if not os.path.exists(_journal_file):
-        return "", 204  # no content yet
-    with open(_journal_file, "r") as f:
-        content = f.read()
-    from flask import Response
+    if os.path.exists(_journal_file):
+        with open(_journal_file, "r") as f:
+            content = f.read()
+    else:
+        # Local file missing (fresh deploy) — pull from Gist
+        content = _gist_read()
+    if not content:
+        return "", 204
     return Response(content, mimetype="text/csv")
 
 
@@ -745,6 +801,7 @@ def health():
 
 
 if __name__ == "__main__":
+    _load_gist_into_local()
     log.info("=" * 60)
     log.info("TradeLocker Bot  |  server=%s  risk=%.1f%%", TL_SERVER, RISK_PCT)
     log.info("Config: %s", CONFIG_FILE)
