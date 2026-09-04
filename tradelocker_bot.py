@@ -136,6 +136,8 @@ def _load_gist_into_local():
     """On startup, pull Gist → local file so local cache is warm."""
     content = _gist_read()
     if content:
+        if not content.endswith("\n"):
+            content += "\n"
         with open(_journal_file, "w", newline="") as f:
             f.write(content)
 

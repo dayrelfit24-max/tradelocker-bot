@@ -3,3 +3,16 @@ config.env
 __pycache__/
 *.pyc
 .env
+youtube-pipeline/config.env
+youtube-pipeline/youtube_cookies.txt
+youtube-pipeline/client_secrets.json
+youtube-pipeline/tokens/
+youtube-pipeline/.venv/
+youtube-pipeline/incoming/*
+youtube-pipeline/processed/*
+youtube-pipeline/thumbnails/*
+!youtube-pipeline/incoming/.gitkeep
+!youtube-pipeline/processed/.gitkeep
+!youtube-pipeline/thumbnails/.gitkeep
+youtube-pipeline/generated/*
+!youtube-pipeline/generated/.gitkeep

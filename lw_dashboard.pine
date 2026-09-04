@@ -1,0 +1,185 @@
+//@version=6
+indicator("LW Multi-Signal Dashboard [Dayrel]", overlay=true, max_bars_back=500)
+
+// ══════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════
+grp_wr   = "① Williams %R"
+wr_len          = input.int(8,     "Length",               group=grp_wr)
+wr_long_lvl     = input.float(-20, "Long Level",           group=grp_wr)
+wr_short_lvl    = input.float(-80, "Short Level",          group=grp_wr)
+
+grp_ema  = "② EMA Filter"
+ema_long_len    = input.int(20,    "Long EMA",             group=grp_ema)
+ema_short_len   = input.int(5,     "Short EMA",            group=grp_ema)
+
+grp_val  = "③ WVal (Valuation)"
+val_len         = input.int(22,    "Lookback",             group=grp_val)
+val_over        = input.int(85,    "Over Threshold",       group=grp_val)
+val_under       = input.int(15,    "Under Threshold",      group=grp_val)
+
+grp_lwti = "④ Large Trade Index"
+lwti_len        = input.int(8,     "Length",               group=grp_lwti)
+lwti_sig_len    = input.int(5,     "Signal",               group=grp_lwti)
+
+grp_seas = "⑤ Seasonal (manual)"
+seas_val        = input.float(0.0, "Today's AVGnow Value", group=grp_seas,
+                   tooltip="Enter today's AVGnow value from the Seasonal indicator each morning before trading")
+seas_bull_thr   = input.float( 0.20, "Bull Threshold",    group=grp_seas)
+seas_bear_thr   = input.float(-0.20, "Bear Threshold",    group=grp_seas)
+
+grp_time = "⑥ Time Filter"
+use_time        = input.bool(true,  "Enable Time Filter",             group=grp_time)
+cutoff_hr       = input.int(11,     "No-Trade After Hour (ET)",       group=grp_time)
+
+grp_sig  = "Signal Settings"
+min_bull        = input.int(3, "Min signals for BUY  (1-5)",  group=grp_sig, minval=1, maxval=5)
+min_bear        = input.int(3, "Min signals for SELL (1-5)", group=grp_sig, minval=1, maxval=5)
+show_labels     = input.bool(true, "Show BUY/SELL labels on chart", group=grp_sig)
+
+// ══════════════════════════════════════════════════════════════
+// 1. WILLIAMS %R
+// ══════════════════════════════════════════════════════════════
+wr_val   = ta.wpr(wr_len)
+wr_bull  = wr_val >= wr_long_lvl
+wr_bear  = wr_val <= wr_short_lvl
+
+// ══════════════════════════════════════════════════════════════
+// 2. EMA RECLAIM / REJECT
+// ══════════════════════════════════════════════════════════════
+ema_l    = ta.ema(close, ema_long_len)
+ema_s    = ta.ema(close, ema_short_len)
+ema_bull = close > ema_l and ema_s > ema_l
+ema_bear = close < ema_l and ema_s < ema_l
+
+// ══════════════════════════════════════════════════════════════
+// 3. WVAL — DXY + Gold + Bonds percentile rank
+// ══════════════════════════════════════════════════════════════
+// Always read on Daily so WVal is meaningful even on 2m/5m execution charts
+dxy   = request.security("TVC:DXY",    "D", close)
+gold  = request.security("COMEX:GC1!", "D", close)
+bonds = request.security("CBOT:ZB1!",  "D", close)
+
+wval       = (ta.percentrank(dxy, val_len) + ta.percentrank(gold, val_len) + ta.percentrank(bonds, val_len)) / 3
+wval_bull  = wval <= val_under
+wval_bear  = wval >= val_over
+
+// ══════════════════════════════════════════════════════════════
+// 4. LWTI — Large Trade Index (institutional volume pressure)
+// ══════════════════════════════════════════════════════════════
+up_vol    = volume * (close >= open ? 1.0 : 0.0)
+dn_vol    = volume * (close <  open ? 1.0 : 0.0)
+lwti_raw  = ta.ema(up_vol, lwti_len) - ta.ema(dn_vol, lwti_len)
+lwti_line = ta.sma(lwti_raw, lwti_sig_len)
+lwti_bull = lwti_raw > lwti_line
+lwti_bear = lwti_raw < lwti_line
+
+// ══════════════════════════════════════════════════════════════
+// 5. SEASONAL — manual AVGnow input each morning
+// ══════════════════════════════════════════════════════════════
+seas_bull = seas_val >= seas_bull_thr
+seas_bear = seas_val <= seas_bear_thr
+
+// ══════════════════════════════════════════════════════════════
+// 6. TIME FILTER
+// ══════════════════════════════════════════════════════════════
+et_hour   = hour(time, "America/New_York")
+in_window = not use_time or et_hour < cutoff_hr
+
+// ══════════════════════════════════════════════════════════════
+// SCORING
+// ══════════════════════════════════════════════════════════════
+bull_score = (wr_bull ? 1 : 0) + (ema_bull ? 1 : 0) + (wval_bull ? 1 : 0) + (lwti_bull ? 1 : 0) + (seas_bull ? 1 : 0)
+bear_score = (wr_bear ? 1 : 0) + (ema_bear ? 1 : 0) + (wval_bear ? 1 : 0) + (lwti_bear ? 1 : 0) + (seas_bear ? 1 : 0)
+
+buy_sig  = bull_score >= min_bull and in_window and barstate.isconfirmed
+sell_sig = bear_score >= min_bear and in_window and barstate.isconfirmed
+
+// ══════════════════════════════════════════════════════════════
+// LABELS ON CHART
+// ══════════════════════════════════════════════════════════════
+if show_labels
+    if buy_sig and not buy_sig[1]
+        label.new(bar_index, low * 0.9995,
+          "▲ BUY  " + str.tostring(bull_score) + "/5",
+          color=color.new(#10B981, 10), textcolor=color.white,
+          style=label.style_label_up, size=size.normal)
+
+    if sell_sig and not sell_sig[1]
+        label.new(bar_index, high * 1.0005,
+          "▼ SELL  " + str.tostring(bear_score) + "/5",
+          color=color.new(#F43F5E, 10), textcolor=color.white,
+          style=label.style_label_down, size=size.normal)
+
+// ══════════════════════════════════════════════════════════════
+// DASHBOARD TABLE
+// ══════════════════════════════════════════════════════════════
+C_BULL  = color.new(#10B981, 0)
+C_BEAR  = color.new(#F43F5E, 0)
+C_NEUT  = color.new(#F59E0B, 0)
+C_DIM   = color.new(#64748B, 0)
+C_WHITE = color.new(#E2E8F0, 0)
+C_BG    = color.new(#0F1522, 10)
+C_BG2   = color.new(#1E2A40, 20)
+
+var table dash = table.new(position.top_right, 3, 9,
+  bgcolor=C_BG, border_color=color.new(#1E2A40, 0), border_width=1,
+  frame_color=color.new(#3B82F6, 0), frame_width=1)
+
+if barstate.islast
+    // ── Header
+    table.cell(dash, 0, 0, "SIGNAL",  text_color=C_DIM,   text_size=size.small, bgcolor=C_BG2)
+    table.cell(dash, 1, 0, "VALUE",   text_color=C_DIM,   text_size=size.small, bgcolor=C_BG2)
+    table.cell(dash, 2, 0, "BIAS",    text_color=C_DIM,   text_size=size.small, bgcolor=C_BG2)
+
+    // ── WR%
+    table.cell(dash, 0, 1, "WR%",     text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(math.round(wr_val, 1)), text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 2, 1, wr_bull ? "LONG ▲" : wr_bear ? "SHORT ▼" : "WAIT —",
+      text_color=wr_bull ? C_BULL : wr_bear ? C_BEAR : C_DIM, text_size=size.small)
+
+    // ── EMA
+    table.cell(dash, 0, 2, "EMA",     text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(math.round(ema_l, 2)), text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 2, 2, ema_bull ? "RECLAIM ▲" : ema_bear ? "REJECT ▼" : "WAIT —",
+      text_color=ema_bull ? C_BULL : ema_bear ? C_BEAR : C_DIM, text_size=size.small)
+
+    // ── WVal
+    table.cell(dash, 0, 3, "WVAL",    text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(math.round(wval, 1)), text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 2, 3, wval_bull ? "UNDER ▲" : wval_bear ? "OVER ▼" : "NORMAL —",
+      text_color=wval_bull ? C_BULL : wval_bear ? C_BEAR : C_NEUT, text_size=size.small)
+
+    // ── LWTI
+    table.cell(dash, 0, 4, "LWTI",    text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 1, 4, lwti_bull ? "G > R" : "R > G", text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 2, 4, lwti_bull ? "INST BUY ▲" : "INST SELL ▼",
+      text_color=lwti_bull ? C_BULL : C_BEAR, text_size=size.small)
+
+    // ── Seasonal
+    table.cell(dash, 0, 5, "SEASONAL", text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 1, 5, (seas_val >= 0 ? "+" : "") + str.tostring(seas_val, "#.##"),
+      text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 2, 5, seas_bull ? "BULL ▲" : seas_bear ? "BEAR ▼" : "NEUT —",
+      text_color=seas_bull ? C_BULL : seas_bear ? C_BEAR : C_NEUT, text_size=size.small)
+
+    // ── Time
+    table.cell(dash, 0, 6, "TIME",    text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 1, 6, str.tostring(et_hour) + "h ET", text_color=C_WHITE, text_size=size.small)
+    table.cell(dash, 2, 6, in_window ? "OPEN ✓" : "CLOSED ✗",
+      text_color=in_window ? C_BULL : C_BEAR, text_size=size.small)
+
+    // ── Divider
+    table.cell(dash, 0, 7, "", bgcolor=C_BG2)
+    table.cell(dash, 1, 7, "", bgcolor=C_BG2)
+    table.cell(dash, 2, 7, "", bgcolor=C_BG2)
+
+    // ── Final signal
+    sig_txt   = buy_sig  ? "▲  BUY"  : sell_sig ? "▼  SELL" : "●  WAIT"
+    sig_score = buy_sig  ? str.tostring(bull_score) + " / 5" : sell_sig ? str.tostring(bear_score) + " / 5" : "—"
+    sig_col   = buy_sig  ? C_BULL    : sell_sig ? C_BEAR    : C_NEUT
+    sig_bg    = buy_sig  ? color.new(#10B981, 70) : sell_sig ? color.new(#F43F5E, 70) : color.new(#F59E0B, 85)
+
+    table.cell(dash, 0, 8, "→",       text_color=sig_col, text_size=size.normal, bgcolor=sig_bg)
+    table.cell(dash, 1, 8, sig_score, text_color=sig_col, text_size=size.normal, bgcolor=sig_bg)
+    table.cell(dash, 2, 8, sig_txt,   text_color=sig_col, text_size=size.large,  bgcolor=sig_bg)

@@ -1,0 +1,262 @@
+//@version=6
+indicator("Jarvis Signal v2 [Dayrel]", overlay=true, max_labels_count=300, max_lines_count=300)
+
+// ─── INPUTS ───────────────────────────────────────────────────────────────────
+ema_len      = input.int(21,    "EMA Length",           group="Indicators")
+hma_len      = input.int(55,    "HMA Length",           group="Indicators")
+wr_len       = input.int(14,    "Williams %R Period",   group="Indicators")
+rsi_len      = input.int(14,    "RSI Period",           group="Indicators")
+atr_len      = input.int(14,    "ATR Period",           group="Indicators")
+adx_thresh   = input.int(22,    "Min ADX (trend str)",  group="Indicators", minval=15, maxval=40)
+htf          = input.timeframe("240", "Higher TF bias", group="Indicators")
+sl_mult      = input.float(1.5, "SL  (ATR x)",          group="Risk", step=0.1)
+tp1_mult     = input.float(2.0, "TP1 (ATR x)",          group="Risk", step=0.1)
+tp2_mult     = input.float(3.5, "TP2 (ATR x)",          group="Risk", step=0.1)
+min_rr       = input.float(1.5, "Min R:R to show",      group="Risk", step=0.1)
+show_dash    = input.bool(true, "Show Dashboard",        group="Display")
+show_pdhl    = input.bool(true, "Show Prev Day H/L",     group="Display")
+
+// ─── CORE INDICATORS ─────────────────────────────────────────────────────────
+ema_val  = ta.ema(close, ema_len)
+hma_val  = ta.hma(close, hma_len)
+wr_val   = ta.wpr(wr_len)
+rsi_val  = ta.rsi(close, rsi_len)
+atr_val  = ta.atr(atr_len)
+vol_avg  = ta.sma(volume, 20)
+
+[di_plus, di_minus, adx_val] = ta.dmi(14, 14)
+trending = adx_val >= adx_thresh
+
+[vwap_val, vwap_up, vwap_dn] = ta.vwap(hlc3, timeframe.change("D"), 1.0)
+
+// ─── 4H BIAS ─────────────────────────────────────────────────────────────────
+htf_close = request.security(syminfo.tickerid, htf, close,            lookahead=barmerge.lookahead_off)
+htf_ema   = request.security(syminfo.tickerid, htf, ta.ema(close, 21),lookahead=barmerge.lookahead_off)
+htf_bull  = htf_close > htf_ema
+htf_bear  = htf_close < htf_ema
+
+// ─── PREVIOUS DAY LEVELS ─────────────────────────────────────────────────────
+pd_high = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+pd_low  = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+
+// ─── SESSION TIMING (from WR time-of-day research) ────────────────────────────
+// Best hours ET: 12pm (+0.75%), 5pm (+0.40%), 7pm (+0.24%)
+// Worst hours ET: 7am (-0.61%), 2am (-0.44%), 10pm (-0.38%)
+et_hour    = hour(time, "America/New_York")
+prime_hour = et_hour == 12 or et_hour == 17 or et_hour == 19
+bad_hour   = et_hour == 7  or et_hour == 2  or et_hour == 22 or et_hour == 15
+
+// ─── TREND CONDITIONS ────────────────────────────────────────────────────────
+hma_up     = hma_val > hma_val[2]
+hma_down   = hma_val < hma_val[2]
+ema_up     = close > ema_val and ema_val > ema_val[3]
+ema_down   = close < ema_val and ema_val < ema_val[3]
+above_vwap = close > vwap_val
+below_vwap = close < vwap_val
+wr_ob      = wr_val >= -15
+wr_os      = wr_val <= -85
+
+// ─── RSI DIVERGENCE ──────────────────────────────────────────────────────────
+price_ll = low  < ta.lowest(low,  5)[1]
+rsi_hl   = rsi_val > ta.lowest(rsi_val, 5)[1]
+bull_div = price_ll and rsi_hl and rsi_val < 45
+
+price_hh = high > ta.highest(high, 5)[1]
+rsi_lh   = rsi_val < ta.highest(rsi_val, 5)[1]
+bear_div = price_hh and rsi_lh and rsi_val > 55
+
+// ─── VOLUME ──────────────────────────────────────────────────────────────────
+vol_ok     = volume > vol_avg * 1.3
+vol_climax = volume > vol_avg * 2.5
+
+// ─── POWER CANDLE ─────────────────────────────────────────────────────────────
+bar_range  = high - low
+bull_power = bar_range > 0 and (close - low)  / bar_range >= 0.60
+bear_power = bar_range > 0 and (high - close) / bar_range >= 0.60
+
+// ─── SCORE (max 10) ──────────────────────────────────────────────────────────
+bull_score = 0
+bull_score += htf_bull   ? 2 : 0   // 4H aligned = highest weight
+bull_score += hma_up     ? 1 : 0
+bull_score += ema_up     ? 1 : 0
+bull_score += above_vwap ? 1 : 0
+bull_score += wr_os      ? 2 : 0   // WR oversold = strong
+bull_score += bull_div   ? 2 : 0   // RSI divergence = strong
+bull_score += vol_ok     ? 1 : 0
+
+bear_score = 0
+bear_score += htf_bear   ? 2 : 0
+bear_score += hma_down   ? 1 : 0
+bear_score += ema_down   ? 1 : 0
+bear_score += below_vwap ? 1 : 0
+bear_score += wr_ob      ? 2 : 0
+bear_score += bear_div   ? 2 : 0
+bear_score += vol_ok     ? 1 : 0
+
+sess_bonus     = prime_hour ? 1 : bad_hour ? -2 : 0
+bull_score_adj = bull_score + sess_bonus
+bear_score_adj = bear_score + sess_bonus
+
+// Require 7/10 + trending + not a bad hour
+strong_bull = bull_score_adj >= 7 and trending and not bad_hour
+strong_bear = bear_score_adj >= 7 and trending and not bad_hour
+watch_bull  = bull_score_adj == 6 and trending
+watch_bear  = bear_score_adj == 6 and trending
+
+// Bar close confirmation — no repainting
+buy_signal  = strong_bull and bull_power and barstate.isconfirmed and not strong_bull[1]
+sell_signal = strong_bear and bear_power and barstate.isconfirmed and not strong_bear[1]
+
+// ─── LEVELS ──────────────────────────────────────────────────────────────────
+buy_entry  = close
+buy_sl     = math.min(ta.lowest(low, 3) - atr_val * 0.5, vwap_dn)
+buy_tp1    = close + atr_val * tp1_mult
+buy_tp2    = math.max(close + atr_val * tp2_mult, pd_high)
+sell_entry = close
+sell_sl    = math.max(ta.highest(high, 3) + atr_val * 0.5, vwap_up)
+sell_tp1   = close - atr_val * tp1_mult
+sell_tp2   = math.min(close - atr_val * tp2_mult, pd_low)
+
+buy_rr  = math.abs(buy_entry - buy_sl)   > 0 ? math.abs(buy_tp1  - buy_entry)  / math.abs(buy_entry  - buy_sl)  : 0
+sell_rr = math.abs(sell_sl - sell_entry) > 0 ? math.abs(sell_entry - sell_tp1) / math.abs(sell_sl - sell_entry) : 0
+
+good_buy  = buy_rr  >= min_rr
+good_sell = sell_rr >= min_rr
+
+// ─── PLOTS ───────────────────────────────────────────────────────────────────
+plot(ema_val,  "EMA",      color=color.new(color.aqua,   0), linewidth=1)
+plot(hma_val,  "HMA",      color=color.new(color.orange, 0), linewidth=2)
+plot(vwap_val, "VWAP",     color=color.new(color.white, 20), linewidth=1)
+plot(vwap_up,  "VWAP +1s", color=color.new(color.green, 50), linewidth=1)
+plot(vwap_dn,  "VWAP -1s", color=color.new(color.red,   50), linewidth=1)
+plot(show_pdhl ? pd_high : na, "PDH", color=color.new(color.yellow,  20), linewidth=1, style=plot.style_circles)
+plot(show_pdhl ? pd_low  : na, "PDL", color=color.new(color.fuchsia, 20), linewidth=1, style=plot.style_circles)
+
+bgcolor(prime_hour ? color.new(color.blue, 93) : na, title="Prime Hour")
+bgcolor(bad_hour   ? color.new(color.red,  95) : na, title="Avoid Hour")
+
+// ─── LABELS ──────────────────────────────────────────────────────────────────
+if buy_signal and good_buy
+    div_txt = bull_div ? " + DIV" : ""
+    lbl = "BUY" + div_txt +
+          "\nEntry $" + str.tostring(math.round(buy_entry)) +
+          "\nSL    $" + str.tostring(math.round(buy_sl)) +
+          "\nTP1   $" + str.tostring(math.round(buy_tp1)) +
+          "\nTP2   $" + str.tostring(math.round(buy_tp2)) +
+          "\nR:R   1:" + str.tostring(math.round(buy_rr, 1)) +
+          "\n4H "  + (htf_bull ? "BULL" : "BEAR") +
+          "  ADX " + str.tostring(math.round(adx_val, 1)) +
+          "\nScore " + str.tostring(bull_score_adj) + "/10"
+    label.new(bar_index, low - atr_val * 1.2, lbl,
+              color=color.new(color.green, 5), textcolor=color.white,
+              style=label.style_label_up, size=size.normal)
+
+if sell_signal and good_sell
+    div_txt = bear_div ? " + DIV" : ""
+    lbl = "SELL" + div_txt +
+          "\nEntry $" + str.tostring(math.round(sell_entry)) +
+          "\nSL    $" + str.tostring(math.round(sell_sl)) +
+          "\nTP1   $" + str.tostring(math.round(sell_tp1)) +
+          "\nTP2   $" + str.tostring(math.round(sell_tp2)) +
+          "\nR:R   1:" + str.tostring(math.round(sell_rr, 1)) +
+          "\n4H "  + (htf_bear ? "BEAR" : "BULL") +
+          "  ADX " + str.tostring(math.round(adx_val, 1)) +
+          "\nScore " + str.tostring(bear_score_adj) + "/10"
+    label.new(bar_index, high + atr_val * 1.2, lbl,
+              color=color.new(color.red, 5), textcolor=color.white,
+              style=label.style_label_down, size=size.normal)
+
+if watch_bull
+    label.new(bar_index, low, "WATCH " + str.tostring(bull_score_adj) + "/10",
+              color=color.new(color.yellow, 50), textcolor=color.white,
+              style=label.style_label_up, size=size.tiny)
+
+if watch_bear
+    label.new(bar_index, high, "WATCH " + str.tostring(bear_score_adj) + "/10",
+              color=color.new(color.orange, 50), textcolor=color.white,
+              style=label.style_label_down, size=size.tiny)
+
+// ─── DASHBOARD ───────────────────────────────────────────────────────────────
+if show_dash and barstate.islast
+    var tbl = table.new(position.top_right, 2, 13,
+                        bgcolor=color.new(color.black, 15),
+                        border_color=color.new(color.gray, 50), border_width=1,
+                        frame_color=color.new(color.gray, 30),  frame_width=1)
+
+    table.cell(tbl, 0, 0, "JARVIS v2", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy,10))
+    table.cell(tbl, 1, 0, "READING",   text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy,10))
+
+    table.cell(tbl, 0, 1, "4H BIAS",   text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 1, htf_bull ? "BULL" : "BEAR",
+               text_color = htf_bull ? color.green : color.red, text_size=size.small)
+
+    table.cell(tbl, 0, 2, "HMA",       text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 2, hma_up ? "BULL" : "BEAR",
+               text_color = hma_up ? color.green : color.red, text_size=size.small)
+
+    table.cell(tbl, 0, 3, "EMA",       text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, ema_up ? "BULL" : "BEAR",
+               text_color = ema_up ? color.green : color.red, text_size=size.small)
+
+    table.cell(tbl, 0, 4, "VWAP",      text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 4, above_vwap ? "ABOVE" : "BELOW",
+               text_color = above_vwap ? color.green : color.red, text_size=size.small)
+
+    wr_c = wr_ob ? color.red : wr_os ? color.lime : color.gray
+    wr_t = wr_ob ? "OVERBOUGHT" : wr_os ? "OVERSOLD" : str.tostring(math.round(wr_val, 1))
+    table.cell(tbl, 0, 5, "WR%",       text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 5, wr_t,        text_color=wr_c,        text_size=size.small)
+
+    div_t = bull_div ? "BULL DIV" : bear_div ? "BEAR DIV" : "none"
+    div_c = bull_div ? color.lime  : bear_div ? color.red  : color.gray
+    table.cell(tbl, 0, 6, "RSI DIV",   text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 6, div_t,       text_color=div_c,       text_size=size.small)
+
+    adx_t = str.tostring(math.round(adx_val, 1)) + (trending ? " TREND" : " CHOP")
+    adx_c = trending ? color.green : color.red
+    table.cell(tbl, 0, 7, "ADX",       text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 7, adx_t,       text_color=adx_c,       text_size=size.small)
+
+    sess_t = prime_hour ? "PRIME +1" : bad_hour ? "AVOID -2" : "NORMAL"
+    sess_c = prime_hour ? color.lime  : bad_hour ? color.red  : color.gray
+    table.cell(tbl, 0, 8, "SESSION",   text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 8, sess_t,      text_color=sess_c,      text_size=size.small)
+
+    vol_t = vol_climax ? "CLIMAX" : vol_ok ? "HIGH" : "LOW"
+    vol_c = vol_climax ? color.yellow : vol_ok ? color.green : color.gray
+    table.cell(tbl, 0, 9, "VOLUME",    text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 9, vol_t,       text_color=vol_c,       text_size=size.small)
+
+    table.cell(tbl, 0, 10, "BULL",     text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 10, str.tostring(bull_score_adj) + "/10",
+               text_color=color.green, text_size=size.small)
+
+    table.cell(tbl, 0, 11, "BEAR",     text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 11, str.tostring(bear_score_adj) + "/10",
+               text_color=color.red, text_size=size.small)
+
+    var sig_t = "NO SIGNAL"
+    var sig_c = color.gray
+    if buy_signal and good_buy
+        sig_t := "BUY — TAKE IT"
+        sig_c := color.lime
+    else if sell_signal and good_sell
+        sig_t := "SELL — TAKE IT"
+        sig_c := color.red
+    else if watch_bull
+        sig_t := "WATCH LONG"
+        sig_c := color.yellow
+    else if watch_bear
+        sig_t := "WATCH SHORT"
+        sig_c := color.yellow
+    else if not trending
+        sig_t := "CHOPPY — WAIT"
+        sig_c := color.orange
+    table.cell(tbl, 0, 12, "SIGNAL",   text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 12, sig_t,      text_color=sig_c,       text_size=size.small)
+
+// ─── ALERTS ──────────────────────────────────────────────────────────────────
+alertcondition(buy_signal  and good_buy,  "Jarvis BUY v2",        "BUY SIGNAL — {{ticker}} ${{close}} — check chart for levels")
+alertcondition(sell_signal and good_sell, "Jarvis SELL v2",       "SELL SIGNAL — {{ticker}} ${{close}} — check chart for levels")
+alertcondition(watch_bull,                "Jarvis WATCH Long v2",  "WATCH: Long setup forming on {{ticker}}")
+alertcondition(watch_bear,                "Jarvis WATCH Short v2", "WATCH: Short setup forming on {{ticker}}")

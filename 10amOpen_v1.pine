@@ -1,0 +1,46 @@
+//@version=6
+indicator("Session Time Line [Dayrel]", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ─── Time Inputs ──────────────────────────────────────────────────────────────
+target_hour = input.int(10,  "Hour (0–23, Eastern Time)",   minval=0, maxval=23, group="Time")
+target_min  = input.int(0,   "Minute (0–59)",               minval=0, maxval=59, group="Time")
+
+// ─── Style Inputs ─────────────────────────────────────────────────────────────
+line_color  = input.color(color.new(color.yellow, 0), "Line Color",  group="Style")
+line_style  = input.string("Dashed", "Line Style", options=["Dashed", "Solid", "Dotted"], group="Style")
+line_width  = input.int(1, "Line Width", minval=1, maxval=4, group="Style")
+show_label  = input.bool(true, "Show Time Label", group="Style")
+
+// ─── Style Mapping ────────────────────────────────────────────────────────────
+var style = line.style_dashed
+if line_style == "Solid"
+    style := line.style_solid
+else if line_style == "Dotted"
+    style := line.style_dotted
+else
+    style := line.style_dashed
+
+// ─── Time Detection ───────────────────────────────────────────────────────────
+// America/New_York automatically handles EST (UTC-5) and EDT (UTC-4)
+is_target = hour(time, "America/New_York") == target_hour and minute(time, "America/New_York") == target_min
+
+// ─── Label Text ───────────────────────────────────────────────────────────────
+// Format hour:minute nicely e.g. "10:00" or "9:30"
+label_txt = str.tostring(target_hour) + ":" + (target_min < 10 ? "0" : "") + str.tostring(target_min)
+
+// ─── Draw Vertical Line + Label ───────────────────────────────────────────────
+if is_target
+    line.new(bar_index, low, bar_index, high,
+             extend = extend.both,
+             color  = line_color,
+             style  = style,
+             width  = line_width)
+
+    if show_label
+        label.new(bar_index, high,
+                  label_txt,
+                  color     = color.new(line_color, 70),
+                  textcolor = color.white,
+                  style     = label.style_label_down,
+                  size      = size.small,
+                  yloc      = yloc.abovebar)

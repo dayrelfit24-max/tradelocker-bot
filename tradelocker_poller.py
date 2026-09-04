@@ -204,10 +204,10 @@ _known_pos_ids = set()
 # ── Column helpers ─────────────────────────────────────────────────────────────
 # TradeLocker ordersHistory default column order (from API docs)
 OH_COLS = [
-    "id", "accountId", "tradableInstrumentId", "qty", "side", "type",
-    "status", "filledQty", "price", "averageFillPrice", "commission", "validity",
-    "stopPrice", "createdTimestamp", "updatedTimestamp", "isReducing", "positionId",
-    "slPrice", "tpPrice", "trailingOffset", "digitalSignature", "userNote"
+    "id", "tradableInstrumentId", "routeId", "qty", "side", "type",
+    "status", "filledQty", "averageFillPrice", "price", "stopPrice", "validity",
+    "expireDate", "createdTimestamp", "updatedTimestamp", "isOpen", "positionId",
+    "slPrice", "slType", "tpPrice", "tpType", "strategyId"
 ]
 
 def col(row, name, cols=None):
@@ -354,23 +354,23 @@ def build_trades_from_orders(filled):
             try: return float(q)
             except: return 0.0
 
-        def is_reducing(r):
-            v = col(r, "isReducing")
+        def is_open(r):
+            v = col(r, "isOpen")
             if v is None:
                 return False
             return str(v).lower() in ("true", "1", "yes")
 
-        # Split into openers (non-reducing) and closers (reducing)
-        openers = [o for o in orders if not is_reducing(o)]
-        closers = [o for o in orders if is_reducing(o)]
+        # isOpen=true marks the position-opening order; false marks the closer
+        openers = [o for o in orders if is_open(o)]
+        closers = [o for o in orders if not is_open(o)]
 
         # If we only see closers (opener is outside the cursor window), fetch full history
         if not openers and closers:
             all_orders = fetch_orders_for_position(pos_id)
-            openers = [o for o in all_orders if not is_reducing(o)]
-            closers = [o for o in all_orders if is_reducing(o)]
+            openers = [o for o in all_orders if is_open(o)]
+            closers = [o for o in all_orders if not is_open(o)]
 
-        # Fallback: if isReducing not set, use buy/sell pairing
+        # Fallback: if isOpen not set, use buy/sell pairing
         if not openers or not closers:
             buys  = [o for o in orders if str(col(o, "side") or "").lower() == "buy"]
             sells = [o for o in orders if str(col(o, "side") or "").lower() == "sell"]

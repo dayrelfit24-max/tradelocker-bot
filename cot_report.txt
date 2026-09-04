@@ -1,0 +1,31 @@
+╔══════════════════════════════════════════════════════════════╗
+║         COT REPORT — E-MINI S&P 500 (MES/ES)               ║
+║         Data as of: 2026-08-25           Fetched: 2026-08-28 07:45PM ET║
+╚══════════════════════════════════════════════════════════════╝
+
+Open Interest: N/A
+
+POSITION BREAKDOWN (from tradingster.com):
+┌─────────────────────────┬────────────────┬────────────────┬─────────────────┐
+│ Group                   │ Long           │ Short          │ Net Bias        │
+├─────────────────────────┼────────────────┼────────────────┼─────────────────┤
+│ Asset Mgr (Institutions)│ SEE BELOW      │ SEE BELOW      │ Usually NET LONG│
+│ Leveraged Funds (Hedges)│ SEE BELOW      │ SEE BELOW      │ Watch for flips │
+│ Dealers                 │ SEE BELOW      │ SEE BELOW      │ Usually hedging │
+│ Retail (Nonreportable)  │ SEE BELOW      │ SEE BELOW      │ Contrarian sig  │
+└─────────────────────────┴────────────────┴────────────────┴─────────────────┘
+
+Full report: https://www.tradingster.com/cot/futures/fin/13874A
+
+HOW TO READ THIS FOR YOUR TRADING:
+  • Institutions (Asset Mgr) NET LONG  → Bias to trade LONG
+  • Hedge Funds (Lev Funds) COVERING shorts → Short squeeze risk, go LONG
+  • Hedge Funds ADDING shorts → Downside risk, reduce longs
+  • Retail NET LONG at extremes → Contrarian bearish signal
+
+Last Jul 28 data:
+  Asset Mgr:     1,159,241 long vs 214,471 short → NET +944,770 LONG ✅
+  Lev Funds:       155,964 long vs 453,440 short → NET -297,476 SHORT (but covering)
+  Bias: BULLISH — institutions heavily long, hedge funds cutting shorts
+
+SOURCE: https://www.tradingster.com/cot/futures/fin/13874A

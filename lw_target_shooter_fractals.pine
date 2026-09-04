@@ -1,0 +1,287 @@
+//@version=6
+indicator("LW Target Shooter + Fractals [Dayrel]", overlay=true, max_lines_count=300, max_labels_count=200, max_boxes_count=100)
+
+// ── INPUTS ────────────────────────────────────────────────────────────────────
+fp_int      = input.int(5,    "IT Fractal Period",           minval=2, maxval=20, group="Intermediate Pivots")
+don_period  = input.int(20,   "IT Donchian Period",          minval=1,            group="Intermediate Pivots")
+use_don_int = input.bool(true,"Apply Donchian Filter (IT)",                       group="Intermediate Pivots")
+fp_st       = input.int(2,    "ST Fractal Period",           minval=2, maxval=10, group="Short-Term Pivots")
+use_don_st  = input.bool(false,"Apply Donchian Filter (ST)",                      group="Short-Term Pivots")
+show_box    = input.bool(true, "Show Measured Move Box",                           group="Settings")
+stop_mode   = input.string("Recent ST Low", "Stop Mode",
+               options=["Recent ST Low", "2nd ST Low Back", "Next IT High"],      group="Settings")
+bull_col    = input.color(color.new(color.lime,   0), "Long Target Color",        group="Colors")
+bear_col    = input.color(color.new(color.red,    0), "Short Target Color",       group="Colors")
+stop_col    = input.color(color.new(color.orange, 0), "Stop Loss Color",          group="Colors")
+trail_col   = input.color(color.new(color.yellow, 0), "Trailing Stop Color",      group="Colors")
+
+// ── ALL VAR DECLARATIONS (must be at top scope before any if-blocks) ──────────
+var float last_iph      = na
+var int   last_iph_bar  = na
+var float last_ipl      = na
+var int   last_ipl_bar  = na
+
+var float st_low1       = na
+var int   st_low1_bar   = na
+var float st_low2       = na
+var int   st_low2_bar   = na
+
+var float st_high1      = na
+var int   st_high1_bar  = na
+var float st_high2      = na
+var int   st_high2_bar  = na
+
+var float long_setup_high  = na
+var float long_setup_low   = na
+var float long_target      = na
+var int   long_setup_bar   = na
+
+var float short_setup_low  = na
+var float short_setup_high = na
+var float short_target     = na
+var int   short_setup_bar  = na
+
+var line  ln_long_tgt   = na
+var label lb_long_tgt   = na
+var box   bx_long       = na
+var line  ln_long_stop  = na
+var label lb_long_stop  = na
+var line  ln_short_tgt  = na
+var label lb_short_tgt  = na
+var box   bx_short      = na
+var line  ln_short_stop = na
+var label lb_short_stop = na
+var line  ln_trail1     = na
+var line  ln_trail2     = na
+
+// ── DONCHIAN BASELINE ─────────────────────────────────────────────────────────
+upperDonch = ta.highest(high, don_period)
+lowerDonch = ta.lowest(low,   don_period)
+baseline   = (upperDonch + lowerDonch) / 2
+
+// ── WILLIAMS FRACTAL — INTERMEDIATE (IT) ──────────────────────────────────────
+bool it_up_down = true
+bool it_up_0    = true
+bool it_up_1    = true
+bool it_up_2    = true
+bool it_up_3    = true
+bool it_up_4    = true
+for i = 1 to fp_int
+    it_up_down := it_up_down and (high[fp_int - i] < high[fp_int])
+    it_up_0    := it_up_0    and (high[fp_int + i] < high[fp_int])
+    it_up_1    := it_up_1    and (high[fp_int + 1] <= high[fp_int] and high[fp_int + i + 1] < high[fp_int])
+    it_up_2    := it_up_2    and (high[fp_int + 1] <= high[fp_int] and high[fp_int + 2] <= high[fp_int] and high[fp_int + i + 2] < high[fp_int])
+    it_up_3    := it_up_3    and (high[fp_int + 1] <= high[fp_int] and high[fp_int + 2] <= high[fp_int] and high[fp_int + 3] <= high[fp_int] and high[fp_int + i + 3] < high[fp_int])
+    it_up_4    := it_up_4    and (high[fp_int + 1] <= high[fp_int] and high[fp_int + 2] <= high[fp_int] and high[fp_int + 3] <= high[fp_int] and high[fp_int + 4] <= high[fp_int] and high[fp_int + i + 4] < high[fp_int])
+it_up_flag = it_up_0 or it_up_1 or it_up_2 or it_up_3 or it_up_4
+it_upFrac  = it_up_down and it_up_flag
+
+bool it_dn_down = true
+bool it_dn_0    = true
+bool it_dn_1    = true
+bool it_dn_2    = true
+bool it_dn_3    = true
+bool it_dn_4    = true
+for i = 1 to fp_int
+    it_dn_down := it_dn_down and (low[fp_int - i] > low[fp_int])
+    it_dn_0    := it_dn_0    and (low[fp_int + i] > low[fp_int])
+    it_dn_1    := it_dn_1    and (low[fp_int + 1] >= low[fp_int] and low[fp_int + i + 1] > low[fp_int])
+    it_dn_2    := it_dn_2    and (low[fp_int + 1] >= low[fp_int] and low[fp_int + 2] >= low[fp_int] and low[fp_int + i + 2] > low[fp_int])
+    it_dn_3    := it_dn_3    and (low[fp_int + 1] >= low[fp_int] and low[fp_int + 2] >= low[fp_int] and low[fp_int + 3] >= low[fp_int] and low[fp_int + i + 3] > low[fp_int])
+    it_dn_4    := it_dn_4    and (low[fp_int + 1] >= low[fp_int] and low[fp_int + 2] >= low[fp_int] and low[fp_int + 3] >= low[fp_int] and low[fp_int + 4] >= low[fp_int] and low[fp_int + i + 4] > low[fp_int])
+it_dn_flag = it_dn_0 or it_dn_1 or it_dn_2 or it_dn_3 or it_dn_4
+it_dnFrac  = it_dn_down and it_dn_flag
+
+ph_int = it_upFrac and (not use_don_int or high[fp_int] > baseline[fp_int])
+pl_int = it_dnFrac and (not use_don_int or low[fp_int]  < baseline[fp_int])
+
+// ── WILLIAMS FRACTAL — SHORT-TERM (ST) ───────────────────────────────────────
+bool st_up_down = true
+bool st_up_0    = true
+bool st_up_1    = true
+bool st_up_2    = true
+bool st_up_3    = true
+bool st_up_4    = true
+for i = 1 to fp_st
+    st_up_down := st_up_down and (high[fp_st - i] < high[fp_st])
+    st_up_0    := st_up_0    and (high[fp_st + i] < high[fp_st])
+    st_up_1    := st_up_1    and (high[fp_st + 1] <= high[fp_st] and high[fp_st + i + 1] < high[fp_st])
+    st_up_2    := st_up_2    and (high[fp_st + 1] <= high[fp_st] and high[fp_st + 2] <= high[fp_st] and high[fp_st + i + 2] < high[fp_st])
+    st_up_3    := st_up_3    and (high[fp_st + 1] <= high[fp_st] and high[fp_st + 2] <= high[fp_st] and high[fp_st + 3] <= high[fp_st] and high[fp_st + i + 3] < high[fp_st])
+    st_up_4    := st_up_4    and (high[fp_st + 1] <= high[fp_st] and high[fp_st + 2] <= high[fp_st] and high[fp_st + 3] <= high[fp_st] and high[fp_st + 4] <= high[fp_st] and high[fp_st + i + 4] < high[fp_st])
+st_up_flag = st_up_0 or st_up_1 or st_up_2 or st_up_3 or st_up_4
+st_upFrac  = st_up_down and st_up_flag
+
+bool st_dn_down = true
+bool st_dn_0    = true
+bool st_dn_1    = true
+bool st_dn_2    = true
+bool st_dn_3    = true
+bool st_dn_4    = true
+for i = 1 to fp_st
+    st_dn_down := st_dn_down and (low[fp_st - i] > low[fp_st])
+    st_dn_0    := st_dn_0    and (low[fp_st + i] > low[fp_st])
+    st_dn_1    := st_dn_1    and (low[fp_st + 1] >= low[fp_st] and low[fp_st + i + 1] > low[fp_st])
+    st_dn_2    := st_dn_2    and (low[fp_st + 1] >= low[fp_st] and low[fp_st + 2] >= low[fp_st] and low[fp_st + i + 2] > low[fp_st])
+    st_dn_3    := st_dn_3    and (low[fp_st + 1] >= low[fp_st] and low[fp_st + 2] >= low[fp_st] and low[fp_st + 3] >= low[fp_st] and low[fp_st + i + 3] > low[fp_st])
+    st_dn_4    := st_dn_4    and (low[fp_st + 1] >= low[fp_st] and low[fp_st + 2] >= low[fp_st] and low[fp_st + 3] >= low[fp_st] and low[fp_st + 4] >= low[fp_st] and low[fp_st + i + 4] > low[fp_st])
+st_dn_flag = st_dn_0 or st_dn_1 or st_dn_2 or st_dn_3 or st_dn_4
+st_dnFrac  = st_dn_down and st_dn_flag
+
+ph_st = st_upFrac and (not use_don_st or high[fp_st] > baseline[fp_st])
+pl_st = st_dnFrac and (not use_don_st or low[fp_st]  < baseline[fp_st])
+
+// ── TRACK INTERMEDIATE PIVOTS ─────────────────────────────────────────────────
+if ph_int
+    last_iph     := high[fp_int]
+    last_iph_bar := bar_index - fp_int
+
+if pl_int
+    last_ipl     := low[fp_int]
+    last_ipl_bar := bar_index - fp_int
+
+// ── TRACK SHORT-TERM LOWS ────────────────────────────────────────────────────
+if pl_st
+    st_low2     := st_low1
+    st_low2_bar := st_low1_bar
+    st_low1     := low[fp_st]
+    st_low1_bar := bar_index - fp_st
+
+// ── TRACK SHORT-TERM HIGHS ───────────────────────────────────────────────────
+if ph_st
+    st_high2     := st_high1
+    st_high2_bar := st_high1_bar
+    st_high1     := high[fp_st]
+    st_high1_bar := bar_index - fp_st
+
+// ── LONG SETUP ────────────────────────────────────────────────────────────────
+if pl_int and not na(last_iph_bar) and (bar_index - fp_int) > last_iph_bar and low[fp_int] < last_iph
+    long_setup_high := last_iph
+    long_setup_low  := low[fp_int]
+    long_target     := long_setup_high + (long_setup_high - long_setup_low)
+    long_setup_bar  := last_iph_bar
+
+// ── SHORT SETUP ───────────────────────────────────────────────────────────────
+if ph_int and not na(last_ipl_bar) and (bar_index - fp_int) > last_ipl_bar and high[fp_int] > last_ipl
+    short_setup_low  := last_ipl
+    short_setup_high := high[fp_int]
+    short_target     := short_setup_low - (short_setup_high - short_setup_low)
+    short_setup_bar  := last_ipl_bar
+
+// ── STOP LOSS CALCULATION ─────────────────────────────────────────────────────
+long_stop  = stop_mode == "Recent ST Low"   ? st_low1  : stop_mode == "2nd ST Low Back" ? st_low2  : stop_mode == "Next IT High" ? last_iph : st_low1
+short_stop = stop_mode == "Recent ST Low"   ? st_high1 : stop_mode == "2nd ST Low Back" ? st_high2 : stop_mode == "Next IT High" ? last_ipl : st_high1
+
+// ── RISK / REWARD ─────────────────────────────────────────────────────────────
+long_dist   = not na(long_setup_high)  and not na(long_setup_low)   ? long_setup_high  - long_setup_low   : na
+short_dist  = not na(short_setup_high) and not na(short_setup_low)  ? short_setup_high - short_setup_low  : na
+long_risk   = not na(long_stop)  and not na(long_setup_low)   ? long_setup_low   - long_stop  : na
+long_reward = not na(long_target) and not na(long_setup_low)  ? long_target - long_setup_low  : na
+long_rr     = not na(long_risk)  and long_risk  > 0           ? long_reward  / long_risk       : na
+short_risk  = not na(short_stop) and not na(short_setup_high) ? short_stop   - short_setup_high : na
+short_reward= not na(short_target) and not na(short_setup_high)? short_setup_high - short_target: na
+short_rr    = not na(short_risk) and short_risk > 0           ? short_reward / short_risk       : na
+
+// ── DRAWINGS (redraw every last bar) ─────────────────────────────────────────
+if barstate.islast
+    line.delete(ln_long_tgt)
+    label.delete(lb_long_tgt)
+    box.delete(bx_long)
+    line.delete(ln_long_stop)
+    label.delete(lb_long_stop)
+    line.delete(ln_short_tgt)
+    label.delete(lb_short_tgt)
+    box.delete(bx_short)
+    line.delete(ln_short_stop)
+    label.delete(lb_short_stop)
+    line.delete(ln_trail1)
+    line.delete(ln_trail2)
+
+    if not na(long_target)
+        ln_long_tgt  := line.new(long_setup_bar, long_target, bar_index + 15, long_target,
+                                 color=bull_col, width=2, style=line.style_dashed, extend=extend.right)
+        lb_long_tgt  := label.new(bar_index + 5, long_target,
+                                  "▲ LW TARGET  " + str.tostring(math.round(long_target, 2)) +
+                                  "\n+" + str.tostring(math.round(long_dist, 1)) + " pts" +
+                                  (not na(long_rr) ? "  |  R:R " + str.tostring(math.round(long_rr, 1)) + ":1" : ""),
+                                  color=color.new(color.lime, 10), textcolor=color.white,
+                                  style=label.style_label_left, size=size.normal)
+        if show_box and not na(long_setup_bar)
+            bx_long := box.new(long_setup_bar, long_setup_high, bar_index + 15, long_setup_low,
+                               border_color=color.new(color.blue, 60), border_width=1,
+                               bgcolor=color.new(color.blue, 90))
+        if not na(long_stop)
+            ln_long_stop := line.new(bar_index - 30, long_stop, bar_index + 15, long_stop,
+                                     color=stop_col, width=2, style=line.style_solid, extend=extend.right)
+            lb_long_stop := label.new(bar_index + 5, long_stop,
+                                      "⛔ STOP  " + str.tostring(math.round(long_stop, 2)) + "\n" + stop_mode,
+                                      color=color.new(color.orange, 10), textcolor=color.white,
+                                      style=label.style_label_left, size=size.small)
+        if not na(st_low1) and not na(st_low1_bar)
+            ln_trail1 := line.new(st_low1_bar - 5, st_low1, bar_index + 15, st_low1,
+                                  color=trail_col, width=1, style=line.style_dotted, extend=extend.right)
+        if not na(st_low2) and not na(st_low2_bar)
+            ln_trail2 := line.new(st_low2_bar - 5, st_low2, st_low1_bar, st_low2,
+                                  color=color.new(color.yellow, 50), width=1, style=line.style_dotted)
+
+    if not na(short_target)
+        ln_short_tgt := line.new(short_setup_bar, short_target, bar_index + 15, short_target,
+                                 color=bear_col, width=2, style=line.style_dashed, extend=extend.right)
+        lb_short_tgt := label.new(bar_index + 5, short_target,
+                                  "▼ LW TARGET  " + str.tostring(math.round(short_target, 2)) +
+                                  "\n-" + str.tostring(math.round(short_dist, 1)) + " pts" +
+                                  (not na(short_rr) ? "  |  R:R " + str.tostring(math.round(short_rr, 1)) + ":1" : ""),
+                                  color=color.new(color.red, 10), textcolor=color.white,
+                                  style=label.style_label_left, size=size.normal)
+        if show_box and not na(short_setup_bar)
+            bx_short := box.new(short_setup_bar, short_setup_high, bar_index + 15, short_setup_low,
+                                border_color=color.new(color.red, 60), border_width=1,
+                                bgcolor=color.new(color.red, 90))
+        if not na(short_stop)
+            ln_short_stop := line.new(bar_index - 30, short_stop, bar_index + 15, short_stop,
+                                      color=stop_col, width=2, style=line.style_solid, extend=extend.right)
+            lb_short_stop := label.new(bar_index + 5, short_stop,
+                                       "⛔ STOP  " + str.tostring(math.round(short_stop, 2)) + "\n" + stop_mode,
+                                       color=color.new(color.orange, 10), textcolor=color.white,
+                                       style=label.style_label_left, size=size.small)
+
+// ── PIVOT MARKERS ─────────────────────────────────────────────────────────────
+plotshape(ph_int, "IT High", shape.triangledown, location.abovebar, color.new(color.red,   0), size=size.small, offset=-fp_int)
+plotshape(pl_int, "IT Low",  shape.triangleup,   location.belowbar, color.new(color.lime,  0), size=size.small, offset=-fp_int)
+plotshape(ph_st,  "ST High", shape.triangledown, location.abovebar, color.new(color.red,  50), size=size.tiny,  offset=-fp_st)
+plotshape(pl_st,  "ST Low",  shape.triangleup,   location.belowbar, color.new(color.lime, 50), size=size.tiny,  offset=-fp_st)
+
+// ── TARGET HIT ────────────────────────────────────────────────────────────────
+long_hit  = not na(long_target)  and high >= long_target
+short_hit = not na(short_target) and low  <= short_target
+plotshape(long_hit,  "Long Hit!",  shape.triangleup,   location.abovebar, color.yellow, size=size.large)
+plotshape(short_hit, "Short Hit!", shape.triangledown, location.belowbar, color.yellow, size=size.large)
+if long_hit
+    alert("LW Target Hit: LONG at "  + str.tostring(math.round(long_target,  2)), alert.freq_once_per_bar)
+if short_hit
+    alert("LW Target Hit: SHORT at " + str.tostring(math.round(short_target, 2)), alert.freq_once_per_bar)
+
+// ── DASHBOARD ─────────────────────────────────────────────────────────────────
+if barstate.islast
+    var tbl = table.new(position.bottom_right, 2, 8,
+                        bgcolor=color.new(color.black, 15),
+                        border_color=color.new(color.gray, 60), border_width=1,
+                        frame_color=color.new(color.gray, 40), frame_width=1)
+    table.cell(tbl, 0, 0, "LW TARGET SHOOTER", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 10))
+    table.cell(tbl, 1, 0, "[Dayrel]",           text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 10))
+    table.cell(tbl, 0, 1, "LONG TARGET",  text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 1, not na(long_target)  ? str.tostring(math.round(long_target,  2)) : "—", text_color=color.lime,   text_size=size.small)
+    table.cell(tbl, 0, 2, "LONG STOP",    text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 2, not na(long_stop)    ? str.tostring(math.round(long_stop,    2)) : "—", text_color=color.orange, text_size=size.small)
+    table.cell(tbl, 0, 3, "LONG R:R",     text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, not na(long_rr)  ? str.tostring(math.round(long_rr,  1)) + " : 1" : "—",
+               text_color=not na(long_rr)  and long_rr  >= 2 ? color.lime : not na(long_rr)  and long_rr  >= 1 ? color.yellow : color.red, text_size=size.small)
+    table.cell(tbl, 0, 4, "SHORT TARGET", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 4, not na(short_target) ? str.tostring(math.round(short_target, 2)) : "—", text_color=color.red,    text_size=size.small)
+    table.cell(tbl, 0, 5, "SHORT STOP",   text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 5, not na(short_stop)   ? str.tostring(math.round(short_stop,   2)) : "—", text_color=color.orange, text_size=size.small)
+    table.cell(tbl, 0, 6, "SHORT R:R",    text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 6, not na(short_rr) ? str.tostring(math.round(short_rr, 1)) + " : 1" : "—",
+               text_color=not na(short_rr) and short_rr >= 2 ? color.lime : not na(short_rr) and short_rr >= 1 ? color.yellow : color.red, text_size=size.small)
+    table.cell(tbl, 0, 7, "STOP MODE",    text_color=color.white,  text_size=size.small)
+    table.cell(tbl, 1, 7, stop_mode,      text_color=color.yellow, text_size=size.small)

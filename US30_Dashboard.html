@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>US30 Morning Intelligence Dashboard</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a1a; padding: 24px; }
+  h1 { font-size: 20px; font-weight: 500; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: #666; margin-bottom: 20px; }
+  .section-label { font-size: 11px; font-weight: 500; letter-spacing: 0.06em; color: #888; text-transform: uppercase; margin-bottom: 10px; }
+  .card { background: #fff; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 12px; padding: 16px 20px; margin-bottom: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .input-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .input-row label { font-size: 13px; color: #555; min-width: 110px; }
+  .input-row input[type=range] { flex: 1; accent-color: #378ADD; }
+  .input-row .val { font-size: 13px; font-weight: 500; min-width: 52px; text-align: right; }
+  .toggle-group { display: flex; gap: 6px; flex: 1; }
+  .tog { flex: 1; padding: 6px 0; font-size: 12px; font-weight: 500; border: 0.5px solid #ccc; border-radius: 8px; background: #f5f5f0; color: #666; cursor: pointer; text-align: center; transition: all 0.15s; }
+  .tog.active-bull { background: #EAF3DE; color: #3B6D11; border-color: #639922; }
+  .tog.active-bear { background: #FCEBEB; color: #A32D2D; border-color: #E24B4A; }
+  .tog.active-neu { background: #E6F1FB; color: #185FA5; border-color: #378ADD; }
+  .bias-bar-wrap { height: 12px; background: #eee; border-radius: 99px; overflow: hidden; margin: 10px 0 6px; }
+  .bias-bar { height: 100%; border-radius: 99px; transition: width 0.35s, background 0.35s; }
+  .big-bias { font-size: 28px; font-weight: 500; }
+  .bull-text { color: #3B6D11; }
+  .bear-text { color: #A32D2D; }
+  .neu-text { color: #666; }
+  .score-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; padding: 4px 12px; border-radius: 8px; margin-top: 6px; }
+  .bull-badge { background: #EAF3DE; color: #3B6D11; }
+  .bear-badge { background: #FCEBEB; color: #A32D2D; }
+  .neu-badge { background: #f0f0ec; color: #666; }
+  .check-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 0.5px solid rgba(0,0,0,0.08); font-size: 13px; color: #555; }
+  .check-item:last-child { border-bottom: none; }
+  .chk { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+  .chk.pass { background: #EAF3DE; color: #3B6D11; }
+  .chk.fail { background: #FCEBEB; color: #A32D2D; }
+  .chk.warn { background: #FAEEDA; color: #854F0B; }
+  .rule-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 0.5px solid rgba(0,0,0,0.08); font-size: 13px; color: #444; }
+  .rule-row:last-child { border-bottom: none; }
+  .rule-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+  .green-dot { background: #639922; }
+  .red-dot { background: #E24B4A; }
+  .blue-dot { background: #378ADD; }
+  .divider { border: none; border-top: 0.5px solid rgba(0,0,0,0.08); margin: 14px 0; }
+  .date-badge { font-size: 13px; color: #888; float: right; }
+</style>
+</head>
+<body>
+
+<h1>US30 Morning Intelligence <span class="date-badge" id="today-date"></span></h1>
+<p class="subtitle">Enter your pre-market readings to get a bias score before placing any trades</p>
+
+<div class="grid2">
+  <div class="card">
+    <div class="section-label">Market environment</div>
+    <div class="input-row">
+      <label>VIX level</label>
+      <input type="range" id="vix" min="10" max="50" step="1" value="18" oninput="update()">
+      <span class="val" id="vix-v">18</span>
+    </div>
+    <div class="input-row">
+      <label>10-yr yield</label>
+      <input type="range" id="yield10" min="2.0" max="6.0" step="0.05" value="4.3" oninput="update()">
+      <span class="val" id="yield10-v">4.30%</span>
+    </div>
+    <div class="input-row">
+      <label>DXY (dollar)</label>
+      <input type="range" id="dxy" min="90" max="115" step="0.5" value="103" oninput="update()">
+      <span class="val" id="dxy-v">103.0</span>
+    </div>
+    <div class="input-row">
+      <label>US30 pre-mkt</label>
+      <div class="toggle-group" id="premkt-grp">
+        <div class="tog active-bull" onclick="setTog('premkt','bull',this)">Up</div>
+        <div class="tog" onclick="setTog('premkt','neu',this)">Flat</div>
+        <div class="tog" onclick="setTog('premkt','bear',this)">Down</div>
+      </div>
+    </div>
+    <div class="input-row">
+      <label>S&P 500 futures</label>
+      <div class="toggle-group" id="spx-grp">
+        <div class="tog active-bull" onclick="setTog('spx','bull',this)">Green</div>
+        <div class="tog" onclick="setTog('spx','neu',this)">Flat</div>
+        <div class="tog" onclick="setTog('spx','bear',this)">Red</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-label">Fundamental conditions</div>
+    <div class="input-row">
+      <label>Fed stance</label>
+      <div class="toggle-group" id="fed-grp">
+        <div class="tog active-bull" onclick="setTog('fed','bull',this)">Dovish</div>
+        <div class="tog" onclick="setTog('fed','neu',this)">Neutral</div>
+        <div class="tog" onclick="setTog('fed','bear',this)">Hawkish</div>
+      </div>
+    </div>
+    <div class="input-row">
+      <label>Bond mkt (10yr)</label>
+      <div class="toggle-group" id="bonds-grp">
+        <div class="tog" onclick="setTog('bonds','bull',this)">Yields ↓</div>
+        <div class="tog active-neu" onclick="setTog('bonds','neu',this)">Stable</div>
+        <div class="tog" onclick="setTog('bonds','bear',this)">Yields ↑</div>
+      </div>
+    </div>
+    <div class="input-row">
+      <label>Earnings season</label>
+      <div class="toggle-group" id="earn-grp">
+        <div class="tog active-bull" onclick="setTog('earn','bull',this)">Beats</div>
+        <div class="tog" onclick="setTog('earn','neu',this)">Mixed</div>
+        <div class="tog" onclick="setTog('earn','bear',this)">Misses</div>
+      </div>
+    </div>
+    <div class="input-row">
+      <label>High-impact news</label>
+      <div class="toggle-group" id="news-grp">
+        <div class="tog" onclick="setTog('news','bull',this)">Bullish</div>
+        <div class="tog active-neu" onclick="setTog('news','neu',this)">None / wait</div>
+        <div class="tog" onclick="setTog('news','bear',this)">Bearish</div>
+      </div>
+    </div>
+    <div class="input-row">
+      <label>Trend (daily)</label>
+      <div class="toggle-group" id="trend-grp">
+        <div class="tog active-bull" onclick="setTog('trend','bull',this)">Uptrend</div>
+        <div class="tog" onclick="setTog('trend','neu',this)">Ranging</div>
+        <div class="tog" onclick="setTog('trend','bear',this)">Downtrend</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:12px">
+  <div class="section-label">Bias score</div>
+  <div style="display:flex; align-items:center; gap:24px;">
+    <div style="flex:1">
+      <div class="bias-bar-wrap"><div class="bias-bar" id="bias-bar" style="width:60%;background:#639922"></div></div>
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:#888;">
+        <span>Bearish</span><span>Neutral</span><span>Bullish</span>
+      </div>
+    </div>
+    <div style="text-align:right; min-width:160px;">
+      <div class="big-bias bull-text" id="bias-label">BULLISH</div>
+      <div id="bias-badge" class="score-badge bull-badge" style="margin-top:6px">
+        <i class="ti ti-trending-up"></i><span id="bias-score-txt">Score: 7 / 10</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="grid2" style="margin-bottom:12px">
+  <div class="card">
+    <div class="section-label">Pre-trade checklist</div>
+    <div id="checklist"></div>
+  </div>
+  <div class="card">
+    <div class="section-label">Trade filter — 9AM box strategy</div>
+    <div id="filter-result" style="font-size:13px; color:#555; line-height:1.6; margin-bottom:10px;"></div>
+    <hr class="divider">
+    <div class="section-label" style="margin-top:2px">Key levels to watch</div>
+    <div style="font-size:13px; color:#555; line-height:1.8;">
+      <div style="display:flex; justify-content:space-between;"><span>VIX danger zone</span><span style="font-weight:500; color:#1a1a1a;">&gt; 25</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>10yr yield high (risky)</span><span style="font-weight:500; color:#1a1a1a;">&gt; 4.7%</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>DXY inverse pressure</span><span style="font-weight:500; color:#1a1a1a;">&gt; 106</span></div>
+      <div style="display:flex; justify-content:space-between;"><span>Wait after news</span><span style="font-weight:500; color:#1a1a1a;">30 min</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-label">What big players watch — US30 fundamental drivers</div>
+  <div class="grid3" style="margin-top:8px; margin-bottom:0">
+    <div>
+      <div style="font-size:12px; font-weight:500; margin-bottom:6px;">Macro (monthly)</div>
+      <div class="rule-row"><div class="rule-dot blue-dot"></div><div>NFP — strong = hawkish Fed risk</div></div>
+      <div class="rule-row"><div class="rule-dot blue-dot"></div><div>CPI / PCE — high inflation = rate hike</div></div>
+      <div class="rule-row"><div class="rule-dot blue-dot"></div><div>GDP — contraction = bear signal</div></div>
+      <div class="rule-row" style="border:none"><div class="rule-dot blue-dot"></div><div>Retail sales — consumer health</div></div>
+    </div>
+    <div>
+      <div style="font-size:12px; font-weight:500; margin-bottom:6px;">Daily signals</div>
+      <div class="rule-row"><div class="rule-dot green-dot"></div><div>VIX &lt; 20 calm, &gt; 25 fear, &gt; 30 no trade</div></div>
+      <div class="rule-row"><div class="rule-dot green-dot"></div><div>10yr yield rising = equity pressure</div></div>
+      <div class="rule-row"><div class="rule-dot green-dot"></div><div>DXY rising = risk-off for US30</div></div>
+      <div class="rule-row" style="border:none"><div class="rule-dot green-dot"></div><div>S&P 500 futures confirm direction</div></div>
+    </div>
+    <div>
+      <div style="font-size:12px; font-weight:500; margin-bottom:6px;">Sentiment</div>
+      <div class="rule-row"><div class="rule-dot red-dot"></div><div>Fed speakers — hawkish kills rallies</div></div>
+      <div class="rule-row"><div class="rule-dot red-dot"></div><div>Earnings from Dow components</div></div>
+      <div class="rule-row"><div class="rule-dot red-dot"></div><div>Geopolitical risk / tariff news</div></div>
+      <div class="rule-row" style="border:none"><div class="rule-dot red-dot"></div><div>BOJ, ECB decisions (yen / euro)</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('today-date').textContent = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric', year:'numeric' });
+
+const state = { premkt:'bull', spx:'bull', fed:'bull', bonds:'neu', earn:'bull', news:'neu', trend:'bull' };
+
+function setTog(key, val, el) {
+  state[key] = val;
+  const grp = document.getElementById(key + '-grp');
+  grp.querySelectorAll('.tog').forEach(t => {
+    t.className = 'tog';
+    if (t === el) {
+      if (val === 'bull') t.classList.add('active-bull');
+      else if (val === 'bear') t.classList.add('active-bear');
+      else t.classList.add('active-neu');
+    }
+  });
+  update();
+}
+
+function score() {
+  let s = 0;
+  const vix = parseFloat(document.getElementById('vix').value);
+  const y10 = parseFloat(document.getElementById('yield10').value);
+  const dxy = parseFloat(document.getElementById('dxy').value);
+  if (vix < 18) s += 1; else if (vix > 25) s -= 1;
+  if (y10 < 4.0) s += 1; else if (y10 > 4.7) s -= 1;
+  if (dxy < 102) s += 1; else if (dxy > 106) s -= 1;
+  ['premkt','spx','fed','bonds','earn','news','trend'].forEach(k => {
+    if (state[k] === 'bull') s += 1; else if (state[k] === 'bear') s -= 1;
+  });
+  return s;
+}
+
+function update() {
+  const vix = parseFloat(document.getElementById('vix').value);
+  const y10 = parseFloat(document.getElementById('yield10').value);
+  const dxy = parseFloat(document.getElementById('dxy').value);
+  document.getElementById('vix-v').textContent = vix.toFixed(0);
+  document.getElementById('yield10-v').textContent = y10.toFixed(2) + '%';
+  document.getElementById('dxy-v').textContent = dxy.toFixed(1);
+
+  const raw = score();
+  const pct = Math.round(((raw + 10) / 20) * 100);
+  const bar = document.getElementById('bias-bar');
+  const label = document.getElementById('bias-label');
+  const badge = document.getElementById('bias-badge');
+  const scoreTxt = document.getElementById('bias-score-txt');
+  const icon = badge.querySelector('i');
+
+  bar.style.width = Math.max(5, Math.min(95, pct)) + '%';
+  if (raw >= 4) {
+    bar.style.background = '#639922';
+    label.textContent = 'BULLISH'; label.className = 'big-bias bull-text';
+    badge.className = 'score-badge bull-badge'; icon.className = 'ti ti-trending-up';
+  } else if (raw <= -4) {
+    bar.style.background = '#E24B4A';
+    label.textContent = 'BEARISH'; label.className = 'big-bias bear-text';
+    badge.className = 'score-badge bear-badge'; icon.className = 'ti ti-trending-down';
+  } else {
+    bar.style.background = '#888';
+    label.textContent = 'NEUTRAL'; label.className = 'big-bias neu-text';
+    badge.className = 'score-badge neu-badge'; icon.className = 'ti ti-minus';
+  }
+  scoreTxt.textContent = 'Score: ' + raw + ' / 10';
+
+  const items = [
+    { label: 'VIX below 25 (safe volatility)', pass: vix < 25, warn: vix >= 20 && vix < 25 },
+    { label: '10yr yield not spiking above 4.7%', pass: y10 <= 4.7, warn: y10 > 4.5 && y10 <= 4.7 },
+    { label: 'DXY not in strong breakout (< 106)', pass: dxy < 106, warn: dxy >= 103 && dxy < 106 },
+    { label: 'S&P 500 futures aligned with trade', pass: (state.spx==='bull'&&raw>0)||(state.spx==='bear'&&raw<0)||state.spx==='neu' },
+    { label: 'Pre-market US30 direction confirmed', pass: state.premkt !== 'neu', warn: state.premkt === 'neu' },
+    { label: 'No conflicting high-impact news', pass: state.news !== 'neu', warn: state.news === 'neu' },
+    { label: 'Daily trend aligns with bias', pass: (state.trend==='bull'&&raw>=0)||(state.trend==='bear'&&raw<=0), warn: state.trend === 'neu' },
+  ];
+  let html = '';
+  items.forEach(it => {
+    const cls = it.pass ? (it.warn ? 'warn' : 'pass') : 'fail';
+    const icon = it.pass ? (it.warn ? '!' : '✓') : '✕';
+    html += `<div class="check-item"><div class="chk ${cls}">${icon}</div><span>${it.label}</span></div>`;
+  });
+  document.getElementById('checklist').innerHTML = html;
+
+  const noTrade = vix > 30 || y10 > 5.0;
+  const caution = vix > 22 || state.news === 'neu';
+  let txt = '';
+  if (noTrade) txt = '<strong style="color:#A32D2D">⛔ No trade today.</strong> VIX or yields at extreme levels. Wait for conditions to settle.';
+  else if (caution && Math.abs(raw) < 3) txt = '<strong style="color:#854F0B">⚠ Trade with caution.</strong> Mixed signals — wait for a clean 9am box break and retrace before entering. Reduce size.';
+  else if (raw >= 4) txt = '<strong style="color:#3B6D11">✅ Green light — LONG bias.</strong> Conditions favor buying the retrace to the 9am box high. 1% risk, 1.5R target.';
+  else if (raw <= -4) txt = '<strong style="color:#A32D2D">✅ Green light — SHORT bias.</strong> Conditions favor selling the retrace to the 9am box low. 1% risk, 1.5R target.';
+  else txt = '<strong style="color:#5F5E5A">⚡ Neutral conditions.</strong> No strong edge today. Only trade a clean 9am box break with confirmation. Lower size.';
+  document.getElementById('filter-result').innerHTML = txt;
+}
+
+update();
+</script>
+</body>
+</html>

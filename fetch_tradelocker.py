@@ -45,13 +45,61 @@ def _load_journal_rows():
     _journal_rows = rows
     return rows
 
-def load_journal_strategy(symbol, action, entry_price):
-    """Look up strategy from trades_journal.csv (local or Railway) by symbol+action+entry."""
+def load_journal_strategy(symbol, action, entry_price, open_iso=None):
+    """Look up strategy from trades_journal.csv by symbol+action, choosing the row
+    closest in time to the trade's open (falls back to nearest entry price).
+
+    The journal records the signal price, which differs from the broker fill by
+    several points, so time proximity is the reliable key.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    def _parse(ts):
+        try:
+            return _dt.strptime(ts.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
+        except Exception:
+            return None
+
+    open_dt = None
+    if open_iso:
+        try:
+            open_dt = _dt.fromisoformat(str(open_iso))
+            if open_dt.tzinfo is None:
+                open_dt = open_dt.replace(tzinfo=_tz.utc)
+        except Exception:
+            open_dt = None
+
     try:
-        for row in _load_journal_rows():
-            if (row.get("symbol","").upper() == symbol.upper()
-                    and row.get("action","").lower() == action.lower()
-                    and abs(float(row.get("entry", 0)) - entry_price) < 0.5):
+        candidates = [
+            r for r in _load_journal_rows()
+            if r.get("symbol", "").upper() == symbol.upper()
+            and r.get("action", "").lower() == action.lower()
+        ]
+        if not candidates:
+            return "unknown"
+
+        if open_dt:
+            timed = []
+            for r in candidates:
+                rt = _parse(r.get("timestamp", ""))
+                if rt:
+                    timed.append((abs((rt - open_dt).total_seconds()), r))
+            if timed:
+                delta, row = min(timed, key=lambda x: x[0])
+                if delta <= 600:  # within 10 minutes of the signal
+                    return row.get("strategy", "unknown")
+
+        # Fall back to nearest entry price within a symbol-scaled tolerance
+        tol = max(abs(entry_price) * 0.002, 1.0)
+        priced = []
+        for r in candidates:
+            try:
+                priced.append((abs(float(r.get("entry", 0)) - entry_price), r))
+            except Exception:
+                pass
+        if priced:
+            diff, row = min(priced, key=lambda x: x[0])
+            if diff <= tol:
                 return row.get("strategy", "unknown")
     except Exception:
         pass
@@ -146,10 +194,10 @@ oh_cols = config_data.get("ordersHistoryConfig", {}).get("columnNames", [])
 #   status, filledQty, price, averageFillPrice, commission, validity, stopPrice,
 #   createdTimestamp, updatedTimestamp, isReducing, positionId, ...
 FALLBACK_COLS = [
-    "id", "tradableInstrumentId", "brokerId", "qty", "side", "type",
-    "status", "filledQty", "price", "averageFillPrice", "commission", "validity",
-    "stopPrice", "createdTimestamp", "updatedTimestamp", "isReducing", "positionId",
-    "slPrice", "tpPrice", "trailingOffset", "digitalSignature", "userNote"
+    "id", "tradableInstrumentId", "routeId", "qty", "side", "type",
+    "status", "filledQty", "averageFillPrice", "price", "stopPrice", "validity",
+    "expireDate", "createdTimestamp", "updatedTimestamp", "isOpen", "positionId",
+    "slPrice", "slType", "tpPrice", "tpType", "strategyId"
 ]
 if not oh_cols:
     oh_cols = FALLBACK_COLS
@@ -351,17 +399,17 @@ for pos_id, orders in by_position.items():
         try: return float(q)
         except: return 0.0
 
-    def is_reducing(r):
-        v = col(r, "isReducing")
+    def is_open(r):
+        v = col(r, "isOpen")
         if v is None:
             return False
         return str(v).lower() in ("true", "1", "yes")
 
-    # Split by isReducing first (most reliable)
-    openers = [o for o in orders if not is_reducing(o)]
-    closers = [o for o in orders if is_reducing(o)]
+    # isOpen=true marks the position-opening order; false marks the closer
+    openers = [o for o in orders if is_open(o)]
+    closers = [o for o in orders if not is_open(o)]
 
-    # Fallback to buy/sell pairing when isReducing not set
+    # Fallback to buy/sell pairing when isOpen not set
     if not openers or not closers:
         buys  = [o for o in orders if str(col(o, "side") or "").lower() == "buy"]
         sells = [o for o in orders if str(col(o, "side") or "").lower() == "sell"]
@@ -430,7 +478,7 @@ for pos_id, orders in by_position.items():
             "pnl":        pnl,
             "date":       open_ts,
             "exitTime":   close_ts,
-            "strategy":   load_journal_strategy(symbol, "buy" if direction == "Long" else "sell", entry_price),
+            "strategy":   load_journal_strategy(symbol, "buy" if direction == "Long" else "sell", entry_price, open_ts),
             "source":     "api",
         })
 

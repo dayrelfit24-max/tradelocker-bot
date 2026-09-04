@@ -1,0 +1,177 @@
+//@version=6
+strategy("WR + EMA Strategy [Dayrel]",
+         overlay            = true,
+         default_qty_type   = strategy.fixed,
+         default_qty_value  = 1,
+         commission_type    = strategy.commission.percent,
+         commission_value   = 0.05,
+         slippage           = 3,
+         calc_on_every_tick = false)
+
+// ── INPUTS ───────────────────────────────────────────────────────────────────
+ema_len      = input.int(50,    "EMA Length",              minval=1,   group="Indicators")
+wr_len       = input.int(10,    "Williams %R Period",      minval=1,   group="Indicators")
+plb          = input.int(5,     "Pivot Lookback for SL",   minval=2, maxval=20, group="Risk")
+atr_sl_cap   = input.float(4.0, "Max SL width (ATR cap)",  step=0.5,   group="Risk")
+rr_ratio     = input.float(3.0, "Risk:Reward Ratio",       minval=0.5, maxval=20.0, step=0.5, group="Risk")
+account_size = input.float(10000.0, "Account Size ($)",    minval=100, step=500,    group="Risk")
+risk_pct     = input.float(5.0,     "Risk Per Trade (%)",  minval=0.5, maxval=20.0, step=0.5, group="Risk")
+point_value  = input.float(1.0,     "Point Value ($/pt/lot)", minval=0.01, step=0.1, group="Risk",
+               tooltip="Dollar value per point per 1 lot. US30 CFD = 1.0, NAS100 CFD = 1.0, XAUUSD = 1.0")
+enable_long  = input.bool(true,  "Enable Longs",  group="Trade Direction")
+enable_short = input.bool(true,  "Enable Shorts", group="Trade Direction")
+
+// ── CORE CALCULATIONS ────────────────────────────────────────────────────────
+ema_val = ta.ema(close, ema_len)
+wr_val  = ta.wpr(wr_len)
+atr_val = ta.atr(14)
+
+// ── PIVOT HIGH / LOW ─────────────────────────────────────────────────────────
+ph = ta.pivothigh(high, plb, plb)
+pl = ta.pivotlow(low,   plb, plb)
+
+var float last_ph = na
+var float last_pl = na
+if not na(ph)
+    last_ph := ph
+if not na(pl)
+    last_pl := pl
+
+// ── SIGNAL LOGIC ─────────────────────────────────────────────────────────────
+ema_reclaim = close > ema_val and close[1] <= ema_val
+ema_reject  = close < ema_val and close[1] >= ema_val
+
+long_signal  = enable_long  and ema_reclaim and wr_val >= -20 and barstate.isconfirmed
+short_signal = enable_short and ema_reject  and wr_val <= -80 and barstate.isconfirmed
+
+long_entry  = long_signal  and strategy.position_size == 0
+short_entry = short_signal and strategy.position_size == 0
+
+// ── POSITION SIZE — 5% risk of account ──────────────────────────────────────
+dollar_risk = account_size * risk_pct / 100.0
+
+f_long_sl(c) =>
+    raw = not na(last_pl) and last_pl < c ? last_pl : c - atr_val * 2.0
+    math.max(raw, c - atr_val * atr_sl_cap)
+
+f_short_sl(c) =>
+    raw = not na(last_ph) and last_ph > c ? last_ph : c + atr_val * 2.0
+    math.min(raw, c + atr_val * atr_sl_cap)
+
+f_qty(entry, sl) =>
+    risk_pts = math.max(math.abs(entry - sl), atr_val * 0.3)
+    risk_per_lot = risk_pts * point_value
+    math.max(1, math.floor(dollar_risk / risk_per_lot))
+
+// ── STATE ────────────────────────────────────────────────────────────────────
+var float entry_px = na
+var float sl_px    = na
+var float tp_px    = na
+var int   qty_used = 1
+
+// ── LONG ENTRY ───────────────────────────────────────────────────────────────
+if long_entry
+    entry_px := close
+    sl_px    := f_long_sl(close)
+    risk      = math.max(entry_px - sl_px, atr_val * 0.3)
+    tp_px    := entry_px + risk * rr_ratio
+    qty_used := f_qty(entry_px, sl_px)
+    strategy.entry("Long", strategy.long, qty=qty_used)
+
+if long_signal
+    _sl = f_long_sl(close)
+    _r  = math.max(close - _sl, atr_val * 0.3)
+    _tp = close + _r * rr_ratio
+    alert('{"action":"buy","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(close) + ',"sl":' + str.tostring(math.round(_sl, 5)) + ',"tp":' + str.tostring(math.round(_tp, 5)) + ',"secret":"tradelocker_dayrel_2026"}', alert.freq_once_per_bar_close)
+
+// ── SHORT ENTRY ──────────────────────────────────────────────────────────────
+if short_entry
+    entry_px := close
+    sl_px    := f_short_sl(close)
+    risk      = math.max(sl_px - entry_px, atr_val * 0.3)
+    tp_px    := entry_px - risk * rr_ratio
+    qty_used := f_qty(entry_px, sl_px)
+    strategy.entry("Short", strategy.short, qty=qty_used)
+
+if short_signal
+    _sl = f_short_sl(close)
+    _r  = math.max(_sl - close, atr_val * 0.3)
+    _tp = close - _r * rr_ratio
+    alert('{"action":"sell","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(close) + ',"sl":' + str.tostring(math.round(_sl, 5)) + ',"tp":' + str.tostring(math.round(_tp, 5)) + ',"secret":"tradelocker_dayrel_2026"}', alert.freq_once_per_bar_close)
+
+// ── EXIT MANAGEMENT ──────────────────────────────────────────────────────────
+if strategy.position_size > 0 and not na(sl_px) and not na(tp_px)
+    strategy.exit("Long Exit", "Long", stop=sl_px, limit=tp_px, comment="TP")
+
+if strategy.position_size < 0 and not na(sl_px) and not na(tp_px)
+    strategy.exit("Short Exit", "Short", stop=sl_px, limit=tp_px, comment="TP")
+
+// ── PLOTS ────────────────────────────────────────────────────────────────────
+ema_color = close > ema_val ? color.new(color.lime, 0) : color.new(color.red, 0)
+plot(ema_val, "EMA", color=ema_color, linewidth=2)
+
+plotshape(long_signal,  "Long",  shape.triangleup,   location.belowbar, color.lime, size=size.normal)
+plotshape(short_signal, "Short", shape.triangledown, location.abovebar, color.red,  size=size.normal)
+
+var line ln_sl = na
+var line ln_tp = na
+if strategy.position_size != 0
+    line.delete(ln_sl)
+    line.delete(ln_tp)
+    ln_sl := line.new(bar_index, sl_px, bar_index+1, sl_px, color=color.red,   width=2, style=line.style_dashed, extend=extend.right)
+    ln_tp := line.new(bar_index, tp_px, bar_index+1, tp_px, color=color.green, width=2, style=line.style_dashed, extend=extend.right)
+else
+    line.delete(ln_sl)
+    line.delete(ln_tp)
+
+// ── DASHBOARD ────────────────────────────────────────────────────────────────
+if barstate.islast
+    var tbl = table.new(position.top_right, 2, 9,
+                        bgcolor=color.new(color.black,15),
+                        border_color=color.new(color.gray,50), border_width=1,
+                        frame_color=color.new(color.gray,30),  frame_width=1)
+
+    table.cell(tbl,0,0,"WR + EMA",   text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy,10))
+    table.cell(tbl,1,0,"STATUS",     text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy,10))
+
+    table.cell(tbl,0,1,"PRICE/EMA",  text_color=color.white,  text_size=size.small)
+    table.cell(tbl,1,1, close > ema_val ? "ABOVE" : "BELOW",
+               text_color=close > ema_val ? color.lime : color.red, text_size=size.small)
+
+    wr_c = wr_val >= -20 ? color.lime : wr_val <= -80 ? color.red : color.gray
+    wr_t = wr_val >= -20 ? "OB " + str.tostring(math.round(wr_val,1)) :
+           wr_val <= -80 ? "OS " + str.tostring(math.round(wr_val,1)) :
+           str.tostring(math.round(wr_val,1))
+    table.cell(tbl,0,2,"WR(10)",     text_color=color.white, text_size=size.small)
+    table.cell(tbl,1,2, wr_t,        text_color=wr_c,        text_size=size.small)
+
+    table.cell(tbl,0,3,"IN TRADE",   text_color=color.white, text_size=size.small)
+    table.cell(tbl,1,3, strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT",
+               text_color=strategy.position_size > 0 ? color.lime : strategy.position_size < 0 ? color.red : color.gray,
+               text_size=size.small)
+
+    table.cell(tbl,0,4,"R:R RATIO",  text_color=color.white,  text_size=size.small)
+    table.cell(tbl,1,4,"1:" + str.tostring(rr_ratio), text_color=color.yellow, text_size=size.small)
+
+    // Risk / position size row
+    cur_sl      = strategy.position_size > 0 ? f_long_sl(close) : strategy.position_size < 0 ? f_short_sl(close) : f_long_sl(close)
+    calc_qty    = f_qty(close, cur_sl)
+    calc_risk_$ = math.round(dollar_risk, 2)
+    table.cell(tbl,0,5,"RISK $",     text_color=color.white,  text_size=size.small)
+    table.cell(tbl,1,5,"$" + str.tostring(calc_risk_$) + " (" + str.tostring(risk_pct) + "%)", text_color=color.orange, text_size=size.small)
+
+    table.cell(tbl,0,6,"LOT SIZE",   text_color=color.white,  text_size=size.small)
+    table.cell(tbl,1,6, str.tostring(calc_qty) + " lot" + (calc_qty > 1 ? "s" : ""),
+               text_color=color.aqua, text_size=size.small)
+
+    dir_t = enable_long and enable_short ? "L + S" : enable_long ? "LONG ONLY" : enable_short ? "SHORT ONLY" : "DISABLED"
+    dir_c = enable_long and enable_short ? color.yellow : enable_long ? color.lime : enable_short ? color.red : color.gray
+    table.cell(tbl,0,7,"DIRECTION",  text_color=color.white, text_size=size.small)
+    table.cell(tbl,1,7, dir_t,       text_color=dir_c,       text_size=size.small)
+
+    sig_t = long_entry  ? "BUY NOW"    : short_entry  ? "SELL NOW"   :
+            ema_reclaim ? "EMA RECLAIM": ema_reject    ? "EMA REJECT" : "WAITING"
+    sig_c = long_entry  ? color.lime   : short_entry  ? color.red    :
+            ema_reclaim ? color.yellow : ema_reject    ? color.orange : color.gray
+    table.cell(tbl,0,8,"SIGNAL",     text_color=color.white, text_size=size.small)
+    table.cell(tbl,1,8, sig_t,       text_color=sig_c,       text_size=size.small)

@@ -1,0 +1,207 @@
+//@version=6
+indicator("Jarvis Signal [Dayrel]", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
+
+// ─── INPUTS ───────────────────────────────────────────────────────────────────
+ema_len     = input.int(21,  "EMA Length",    group="Indicators")
+hma_len     = input.int(55,  "HMA Length",    group="Indicators")
+wr_len      = input.int(14,  "Williams %R",   group="Indicators")
+atr_len     = input.int(14,  "ATR Length",    group="Indicators")
+rsi_len     = input.int(14,  "RSI Length",    group="Indicators")
+vwap_sd     = input.float(1.0, "VWAP StdDev", group="Indicators")
+
+sl_atr_mult = input.float(1.5, "Stop Loss (ATR x)", group="Risk")
+tp1_mult    = input.float(2.0, "TP1 (ATR x)",       group="Risk")
+tp2_mult    = input.float(3.5, "TP2 (ATR x)",       group="Risk")
+
+show_dash   = input.bool(true, "Show Dashboard",     group="Display")
+show_labels = input.bool(true, "Show Signal Labels", group="Display")
+
+// ─── CORE CALCULATIONS ────────────────────────────────────────────────────────
+ema_val  = ta.ema(close, ema_len)
+hma_val  = ta.hma(close, hma_len)
+wr_val   = ta.wpr(wr_len)
+rsi_val  = ta.rsi(close, rsi_len)
+atr_val  = ta.atr(atr_len)
+vol_avg  = ta.sma(volume, 20)
+
+// VWAP + bands
+[vwap_val, vwap_upper, vwap_lower] = ta.vwap(hlc3, timeframe.change("D"), vwap_sd)
+
+// HMA direction
+hma_up   = hma_val > hma_val[2]
+hma_down = hma_val < hma_val[2]
+
+// EMA trend
+ema_up   = close > ema_val and ema_val > ema_val[3]
+ema_down = close < ema_val and ema_val < ema_val[3]
+
+// VWAP position
+above_vwap = close > vwap_val
+below_vwap = close < vwap_val
+
+// Volume confirmation
+vol_ok = volume > vol_avg * 1.2
+
+// Williams %R zones
+wr_ob  = wr_val >= -15
+wr_os  = wr_val <= -85
+wr_mid = not wr_ob and not wr_os
+
+// RSI confirmation
+rsi_bull = rsi_val > 50
+rsi_bear = rsi_val < 50
+
+// Power candle
+bar_range  = high - low
+bull_power = bar_range > 0 and (close - low)  / bar_range >= 0.55
+bear_power = bar_range > 0 and (high - close) / bar_range >= 0.55
+
+// ─── SIGNAL SCORING SYSTEM ───────────────────────────────────────────────────
+// Each condition adds to a bull/bear score. Max = 7
+bull_score = 0
+bull_score += hma_up      ? 1 : 0
+bull_score += ema_up      ? 1 : 0
+bull_score += above_vwap  ? 1 : 0
+bull_score += wr_os       ? 2 : 0   // WR oversold = strong weight
+bull_score += rsi_bull    ? 1 : 0
+bull_score += vol_ok      ? 1 : 0
+
+bear_score = 0
+bear_score += hma_down    ? 1 : 0
+bear_score += ema_down    ? 1 : 0
+bear_score += below_vwap  ? 1 : 0
+bear_score += wr_ob       ? 2 : 0   // WR overbought = strong weight
+bear_score += rsi_bear    ? 1 : 0
+bear_score += vol_ok      ? 1 : 0
+
+// Signal thresholds
+strong_bull = bull_score >= 5
+strong_bear = bear_score >= 5
+weak_bull   = bull_score == 4
+weak_bear   = bear_score == 4
+
+// ─── ENTRY SIGNALS ───────────────────────────────────────────────────────────
+buy_signal  = strong_bull and bull_power and not strong_bull[1]
+sell_signal = strong_bear and bear_power and not strong_bear[1]
+
+// ─── PRICE LEVELS ────────────────────────────────────────────────────────────
+buy_entry = low  - atr_val * 0.1
+buy_sl    = math.min(low - atr_val * sl_atr_mult, vwap_lower)
+buy_tp1   = close + atr_val * tp1_mult
+buy_tp2   = close + atr_val * tp2_mult
+
+sell_entry = high + atr_val * 0.1
+sell_sl    = math.max(high + atr_val * sl_atr_mult, vwap_upper)
+sell_tp1   = close - atr_val * tp1_mult
+sell_tp2   = close - atr_val * tp2_mult
+
+buy_rr  = buy_sl != close ? math.abs(buy_tp1 - buy_entry) / math.abs(buy_entry - buy_sl) : 0
+sell_rr = sell_sl != close ? math.abs(sell_entry - sell_tp1) / math.abs(sell_sl - sell_entry) : 0
+
+// ─── PLOTS ───────────────────────────────────────────────────────────────────
+plot(ema_val,    "EMA",      color=color.new(color.aqua,  0),  linewidth=1)
+plot(hma_val,    "HMA",      color=color.new(color.orange,0),  linewidth=2)
+plot(vwap_val,   "VWAP",     color=color.new(color.white, 30), linewidth=1, style=plot.style_circles)
+plot(vwap_upper, "VWAP +1σ", color=color.new(color.green, 60), linewidth=1)
+plot(vwap_lower, "VWAP -1σ", color=color.new(color.red,   60), linewidth=1)
+
+// ─── SIGNAL LABELS ────────────────────────────────────────────────────────────
+if buy_signal and show_labels
+    lbl = "🟢 BUY\nEntry: " + str.tostring(math.round(buy_entry, 0)) +
+          "\nSL:    " + str.tostring(math.round(buy_sl, 0)) +
+          "\nTP1:   " + str.tostring(math.round(buy_tp1, 0)) +
+          "\nTP2:   " + str.tostring(math.round(buy_tp2, 0)) +
+          "\nR:R    1:" + str.tostring(math.round(buy_rr, 1)) +
+          "\nScore: " + str.tostring(bull_score) + "/7"
+    label.new(bar_index, low - atr_val,
+              lbl,
+              color     = color.new(color.green, 10),
+              textcolor = color.white,
+              style     = label.style_label_up,
+              size      = size.normal)
+
+if sell_signal and show_labels
+    lbl = "🔴 SELL\nEntry: " + str.tostring(math.round(sell_entry, 0)) +
+          "\nSL:    " + str.tostring(math.round(sell_sl, 0)) +
+          "\nTP1:   " + str.tostring(math.round(sell_tp1, 0)) +
+          "\nTP2:   " + str.tostring(math.round(sell_tp2, 0)) +
+          "\nR:R    1:" + str.tostring(math.round(sell_rr, 1)) +
+          "\nScore: " + str.tostring(bear_score) + "/7"
+    label.new(bar_index, high + atr_val,
+              lbl,
+              color     = color.new(color.red, 10),
+              textcolor = color.white,
+              style     = label.style_label_down,
+              size      = size.normal)
+
+if weak_bull and show_labels
+    label.new(bar_index, low,
+              "⚠️ WATCH\nBull " + str.tostring(bull_score) + "/7",
+              color     = color.new(color.yellow, 40),
+              textcolor = color.white,
+              style     = label.style_label_up,
+              size      = size.tiny)
+
+if weak_bear and show_labels
+    label.new(bar_index, high,
+              "⚠️ WATCH\nBear " + str.tostring(bear_score) + "/7",
+              color     = color.new(color.orange, 40),
+              textcolor = color.white,
+              style     = label.style_label_down,
+              size      = size.tiny)
+
+// ─── DASHBOARD ───────────────────────────────────────────────────────────────
+if show_dash and barstate.islast
+    var tbl = table.new(position.top_right, 2, 10,
+                        bgcolor      = color.new(color.black, 20),
+                        border_color = color.new(color.gray, 50),
+                        border_width = 1,
+                        frame_color  = color.new(color.gray, 30),
+                        frame_width  = 1)
+
+    table.cell(tbl, 0, 0, "JARVIS",    text_color=color.yellow, text_size=size.normal, bgcolor=color.new(color.navy,20))
+    table.cell(tbl, 1, 0, "STATUS",    text_color=color.yellow, text_size=size.normal, bgcolor=color.new(color.navy,20))
+
+    table.cell(tbl, 0, 1, "HMA",       text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 1, hma_up ? "▲ BULL" : "▼ BEAR",
+               text_color = hma_up ? color.green : color.red, text_size=size.small)
+
+    table.cell(tbl, 0, 2, "EMA " + str.tostring(ema_len), text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 2, ema_up ? "▲ BULL" : "▼ BEAR",
+               text_color = ema_up ? color.green : color.red, text_size=size.small)
+
+    table.cell(tbl, 0, 3, "VWAP",      text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, above_vwap ? "▲ ABOVE" : "▼ BELOW",
+               text_color = above_vwap ? color.green : color.red, text_size=size.small)
+
+    wr_color = wr_ob ? color.red : wr_os ? color.green : color.gray
+    wr_txt   = wr_ob ? "OVERBOUGHT" : wr_os ? "OVERSOLD" : "NEUTRAL " + str.tostring(math.round(wr_val, 1))
+    table.cell(tbl, 0, 4, "WR %",      text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 4, wr_txt,      text_color=wr_color,    text_size=size.small)
+
+    table.cell(tbl, 0, 5, "RSI",       text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 5, str.tostring(math.round(rsi_val, 1)) + (rsi_bull ? " ▲" : " ▼"),
+               text_color = rsi_bull ? color.green : color.red, text_size=size.small)
+
+    table.cell(tbl, 0, 6, "VOLUME",    text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 6, vol_ok ? "HIGH ✓" : "LOW",
+               text_color = vol_ok ? color.green : color.gray, text_size=size.small)
+
+    table.cell(tbl, 0, 7, "BULL SCORE", text_color=color.white,  text_size=size.small)
+    table.cell(tbl, 1, 7, str.tostring(bull_score) + "/7",
+               text_color=color.green, text_size=size.small)
+
+    table.cell(tbl, 0, 8, "BEAR SCORE", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 8, str.tostring(bear_score) + "/7",
+               text_color=color.red, text_size=size.small)
+
+    sig_txt = strong_bull ? "🟢 BUY SIGNAL" : strong_bear ? "🔴 SELL SIGNAL" : weak_bull ? "⚠️ WATCH LONG" : weak_bear ? "⚠️ WATCH SHORT" : "⏳ NO SIGNAL"
+    sig_col = strong_bull ? color.green : strong_bear ? color.red : (weak_bull or weak_bear) ? color.yellow : color.gray
+    table.cell(tbl, 0, 9, "SIGNAL",    text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 9, sig_txt,     text_color=sig_col,     text_size=size.small)
+
+// ─── ALERTS ──────────────────────────────────────────────────────────────────
+alertcondition(buy_signal,  "Jarvis BUY Signal",  "🟢 JARVIS BUY — Score {{plot_0}} — Entry near {{close}}")
+alertcondition(sell_signal, "Jarvis SELL Signal", "🔴 JARVIS SELL — Score {{plot_0}} — Entry near {{close}}")
+alertcondition(weak_bull,   "Jarvis WATCH Long",  "⚠️ JARVIS: Watch for Long setup on {{ticker}}")
+alertcondition(weak_bear,   "Jarvis WATCH Short", "⚠️ JARVIS: Watch for Short setup on {{ticker}}")

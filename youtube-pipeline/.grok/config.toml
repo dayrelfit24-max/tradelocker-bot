@@ -1,0 +1,10 @@
+# Project MCP — ProGamer YouTube pipeline
+# Requires VIDIQ_MCP_API_KEY in your shell (see config.example.env)
+
+[mcp_servers.vidiq]
+url = "https://mcp.vidiq.com/mcp"
+enabled = true
+tool_timeout_sec = 120
+
+[mcp_servers.vidiq.headers]
+Authorization = "Bearer ${VIDIQ_MCP_API_KEY}"

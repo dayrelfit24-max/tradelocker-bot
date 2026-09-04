@@ -1,0 +1,612 @@
+//@version=6
+indicator("LW System — Target + WR/EMA + Cycle [Dayrel]", overlay=true, max_lines_count=500, max_labels_count=200, max_boxes_count=100)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+fp_int        = input.int(5,     "IT Fractal Period",           minval=2, maxval=20, group="Fractals — Intermediate")
+don_period    = input.int(20,    "Donchian Period",             minval=1,            group="Fractals — Intermediate")
+use_don_int   = input.bool(true, "Apply Donchian Filter (IT)",                       group="Fractals — Intermediate")
+fp_st         = input.int(2,     "ST Fractal Period",           minval=2, maxval=10, group="Fractals — Short-Term")
+use_don_st    = input.bool(false,"Apply Donchian Filter (ST)",                       group="Fractals — Short-Term")
+ema_len       = input.int(50,    "EMA Length",                  minval=1,            group="WR + EMA")
+wr_len        = input.int(10,    "Williams %R Period",          minval=1,            group="WR + EMA")
+stop_mode     = input.string("Recent ST Low", "Stop Mode",
+                 options=["Recent ST Low", "2nd ST Low Back", "Next IT High"],       group="Trade Settings")
+show_box      = input.bool(true, "Show Measured Move Box",                           group="Trade Settings")
+bull_col      = input.color(color.new(color.lime,   0), "Long Color",               group="Colors")
+bear_col      = input.color(color.new(color.red,    0), "Short Color",              group="Colors")
+stop_col      = input.color(color.new(color.orange, 0), "Stop Color",               group="Colors")
+trail_col     = input.color(color.new(color.yellow, 0), "Trail Color",              group="Colors")
+
+// ── TradeLocker ───────────────────────────────────────────────────────────────
+tl_account    = input.float(25000.0, "TradeLocker Account Size ($)", minval=100, step=500,  group="TradeLocker Risk")
+tl_risk_pct   = input.float(5.0,     "Risk Per Trade (%)",           minval=0.1, maxval=20, step=0.5, group="TradeLocker Risk")
+tl_point_val  = input.float(1.0,     "Point Value ($/pt)",           minval=0.01, step=0.1, group="TradeLocker Risk",
+                 tooltip="TradeLocker CFDs = 1.0")
+
+// ── Tradovate ─────────────────────────────────────────────────────────────────
+tv_contracts  = input.int(1,   "Tradovate Contracts",   minval=1, maxval=50,        group="Tradovate Risk",
+                 tooltip="Number of contracts to open per trade on Tradovate (e.g. 2 MES)")
+tv_point_val  = input.float(5.0, "Point Value ($/pt)",  minval=0.01, step=0.5,      group="Tradovate Risk",
+                 tooltip="MES = 5 | ES = 50 | NQ = 20 | MNQ = 2")
+
+// ── Active account toggle ─────────────────────────────────────────────────────
+active_acct   = input.string("TradeLocker", "Active Account (for dashboard)",
+                 options=["TradeLocker", "Tradovate"],                               group="Active Account")
+
+// ── 13-Week Cycle ─────────────────────────────────────────────────────────────
+cycle_anchor  = input.int(13,    "Earnings Start Day of Month", minval=1, maxval=20, group="13-Week Cycle")
+show_cycle_bg = input.bool(true, "Show Cycle Background",                            group="13-Week Cycle")
+show_cycle_lbl= input.bool(true, "Show Cycle Labels",                                group="13-Week Cycle")
+
+// ── Range Cycle (Larry Williams) ──────────────────────────────────────────────
+range_tf      = input.timeframe("D", "Range Timeframe",                                   group="Range Cycle — LW",
+                 tooltip="Timeframe to measure ranges on. D = Daily (recommended). Use W for weekly, 60 for 1-hour HTF.")
+range_period  = input.int(10,   "Range Lookback (sessions)",      minval=1, maxval=50,    group="Range Cycle — LW",
+                 tooltip="How many higher-timeframe sessions to average. e.g. 10 = last 10 daily ranges")
+small_thresh  = input.int(70,   "Contracted Threshold (%)",       minval=20, maxval=95,   group="Range Cycle — LW",
+                 tooltip="HTF range below this % of its avg = CONTRACTED — big move brewing")
+large_thresh  = input.int(130,  "Expanded Threshold (%)",         minval=105, maxval=300, group="Range Cycle — LW",
+                 tooltip="HTF range above this % of its avg = EXPANDED — congestion likely next")
+range_filter  = input.bool(true, "Filter Signals by Range Phase",                         group="Range Cycle — LW",
+                 tooltip="ON = block BUY/SELL when range is EXPANDED. OFF = signals fire same as before")
+show_range_dots = input.bool(true, "Show Range Phase Background",                         group="Range Cycle — LW",
+                 tooltip="Yellow bg = CONTRACTED (setup brewing). Green bg = EXPANDING (enter). Red bg = EXPANDED (avoid)")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VAR DECLARATIONS — all at top
+// ══════════════════════════════════════════════════════════════════════════════
+var float last_iph      = na
+var int   last_iph_bar  = na
+var float last_ipl      = na
+var int   last_ipl_bar  = na
+
+var float st_low1       = na
+var int   st_low1_bar   = na
+var float st_low2       = na
+var int   st_low2_bar   = na
+
+var float st_high1      = na
+var int   st_high1_bar  = na
+var float st_high2      = na
+var int   st_high2_bar  = na
+
+var float long_setup_high  = na
+var float long_setup_low   = na
+var float long_target      = na
+var int   long_setup_bar   = na
+
+var float short_setup_low  = na
+var float short_setup_high = na
+var float short_target     = na
+var int   short_setup_bar  = na
+
+var line  ln_long_tgt   = na
+var label lb_long_tgt   = na
+var box   bx_long       = na
+var line  ln_long_stop  = na
+var label lb_long_stop  = na
+var line  ln_short_tgt  = na
+var label lb_short_tgt  = na
+var box   bx_short      = na
+var line  ln_short_stop = na
+var label lb_short_stop = na
+var line  ln_trail1     = na
+var line  ln_trail2     = na
+
+var line  ln_cyc_start  = na
+var label lb_cyc_start  = na
+var line  ln_cyc_mid    = na
+var label lb_cyc_mid    = na
+var line  ln_cyc_end    = na
+var label lb_cyc_end    = na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 13-WEEK EARNINGS CYCLE
+// ══════════════════════════════════════════════════════════════════════════════
+ONE_DAY_MS = 86400000
+CYCLE_DAYS = 91
+
+y  = year(time)
+q1 = timestamp(y,   1, cycle_anchor, 0, 0)
+q2 = timestamp(y,   4, cycle_anchor, 0, 0)
+q3 = timestamp(y,   7, cycle_anchor, 0, 0)
+q4 = timestamp(y,  10, cycle_anchor, 0, 0)
+q0 = timestamp(y-1, 10, cycle_anchor, 0, 0)
+
+cycle_start_t = time >= q4 ? q4 : time >= q3 ? q3 : time >= q2 ? q2 : time >= q1 ? q1 : q0
+
+quarter_name =
+  time >= q4 ? "Q4 " + str.tostring(y) :
+  time >= q3 ? "Q3 " + str.tostring(y) :
+  time >= q2 ? "Q2 " + str.tostring(y) :
+  time >= q1 ? "Q1 " + str.tostring(y) :
+  "Q4 " + str.tostring(y-1)
+
+cycle_day  = math.floor((time - cycle_start_t) / ONE_DAY_MS) + 1
+cycle_week = math.ceil(cycle_day / 7.0)
+cycle_pct  = math.min(100, math.max(0, cycle_day / float(CYCLE_DAYS) * 100))
+
+EARLY_END = 21
+MID_START = 42
+MID_END   = 56
+LATE_END  = 77
+
+cyc_phase_col =
+  cycle_day <= EARLY_END ? color.new(color.green,  0) :
+  cycle_day <= MID_START ? color.new(color.blue,   0) :
+  cycle_day <= MID_END   ? color.new(color.yellow, 0) :
+  cycle_day <= LATE_END  ? color.new(color.red,    0) :
+  color.new(color.purple, 0)
+
+cyc_phase_name =
+  cycle_day <= EARLY_END ? "EARNINGS LOW — BUY" :
+  cycle_day <= MID_START ? "EARNINGS RALLY"     :
+  cycle_day <= MID_END   ? "MID-CYCLE TOP"      :
+  cycle_day <= LATE_END  ? "POST-EARNINGS DROP" :
+  "PRE-EARNINGS LOW"
+
+bgcolor(show_cycle_bg and cycle_day > 0         and cycle_day <= EARLY_END  ? color.new(color.green,  92) : na, title="Earnings Low BG")
+bgcolor(show_cycle_bg and cycle_day > EARLY_END and cycle_day <= MID_START  ? color.new(color.blue,   92) : na, title="Earnings Rally BG")
+bgcolor(show_cycle_bg and cycle_day > MID_START and cycle_day <= MID_END    ? color.new(color.yellow, 92) : na, title="Mid-Cycle Top BG")
+bgcolor(show_cycle_bg and cycle_day > MID_END   and cycle_day <= LATE_END   ? color.new(color.red,    92) : na, title="Post-Earnings BG")
+bgcolor(show_cycle_bg and cycle_day > LATE_END  and cycle_day <= CYCLE_DAYS ? color.new(color.purple, 92) : na, title="Pre-Earnings BG")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RANGE CYCLE — Larry Williams (Higher Timeframe)
+// ══════════════════════════════════════════════════════════════════════════════
+// Pull the high-timeframe range (e.g. daily high - daily low)
+htf_high  = request.security(syminfo.tickerid, range_tf, high,  lookahead=barmerge.lookahead_off)
+htf_low   = request.security(syminfo.tickerid, range_tf, low,   lookahead=barmerge.lookahead_off)
+htf_range = htf_high - htf_low
+avg_range  = ta.sma(htf_range, range_period)
+range_pct  = avg_range > 0 ? (htf_range / avg_range) * 100 : 100
+
+is_contracted = range_pct <= small_thresh
+is_expanded   = range_pct >= large_thresh
+is_expanding  = not is_contracted and not is_expanded
+
+range_phase_name =
+  is_contracted ? "CONTRACTED ● SETUP" :
+  is_expanding  ? "EXPANDING  ● ENTER" :
+  "EXPANDED   ● AVOID"
+
+range_phase_col =
+  is_contracted ? color.new(color.yellow, 0) :
+  is_expanding  ? color.new(color.lime,   0) :
+  color.new(color.red, 0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DONCHIAN BASELINE
+// ══════════════════════════════════════════════════════════════════════════════
+upperDonch = ta.highest(high, don_period)
+lowerDonch = ta.lowest(low,   don_period)
+baseline   = (upperDonch + lowerDonch) / 2
+
+// ══════════════════════════════════════════════════════════════════════════════
+// WILLIAMS FRACTAL — INTERMEDIATE (IT)
+// ══════════════════════════════════════════════════════════════════════════════
+bool it_up_down = true
+bool it_up_0    = true
+bool it_up_1    = true
+bool it_up_2    = true
+bool it_up_3    = true
+bool it_up_4    = true
+for i = 1 to fp_int
+    it_up_down := it_up_down and (high[fp_int - i] < high[fp_int])
+    it_up_0    := it_up_0    and (high[fp_int + i] < high[fp_int])
+    it_up_1    := it_up_1    and (high[fp_int + 1] <= high[fp_int] and high[fp_int + i + 1] < high[fp_int])
+    it_up_2    := it_up_2    and (high[fp_int + 1] <= high[fp_int] and high[fp_int + 2] <= high[fp_int] and high[fp_int + i + 2] < high[fp_int])
+    it_up_3    := it_up_3    and (high[fp_int + 1] <= high[fp_int] and high[fp_int + 2] <= high[fp_int] and high[fp_int + 3] <= high[fp_int] and high[fp_int + i + 3] < high[fp_int])
+    it_up_4    := it_up_4    and (high[fp_int + 1] <= high[fp_int] and high[fp_int + 2] <= high[fp_int] and high[fp_int + 3] <= high[fp_int] and high[fp_int + 4] <= high[fp_int] and high[fp_int + i + 4] < high[fp_int])
+it_up_flag = it_up_0 or it_up_1 or it_up_2 or it_up_3 or it_up_4
+it_upFrac  = it_up_down and it_up_flag
+
+bool it_dn_down = true
+bool it_dn_0    = true
+bool it_dn_1    = true
+bool it_dn_2    = true
+bool it_dn_3    = true
+bool it_dn_4    = true
+for i = 1 to fp_int
+    it_dn_down := it_dn_down and (low[fp_int - i] > low[fp_int])
+    it_dn_0    := it_dn_0    and (low[fp_int + i] > low[fp_int])
+    it_dn_1    := it_dn_1    and (low[fp_int + 1] >= low[fp_int] and low[fp_int + i + 1] > low[fp_int])
+    it_dn_2    := it_dn_2    and (low[fp_int + 1] >= low[fp_int] and low[fp_int + 2] >= low[fp_int] and low[fp_int + i + 2] > low[fp_int])
+    it_dn_3    := it_dn_3    and (low[fp_int + 1] >= low[fp_int] and low[fp_int + 2] >= low[fp_int] and low[fp_int + 3] >= low[fp_int] and low[fp_int + i + 3] > low[fp_int])
+    it_dn_4    := it_dn_4    and (low[fp_int + 1] >= low[fp_int] and low[fp_int + 2] >= low[fp_int] and low[fp_int + 3] >= low[fp_int] and low[fp_int + 4] >= low[fp_int] and low[fp_int + i + 4] > low[fp_int])
+it_dn_flag = it_dn_0 or it_dn_1 or it_dn_2 or it_dn_3 or it_dn_4
+it_dnFrac  = it_dn_down and it_dn_flag
+
+ph_int = it_upFrac and (not use_don_int or high[fp_int] > baseline[fp_int])
+pl_int = it_dnFrac and (not use_don_int or low[fp_int]  < baseline[fp_int])
+
+// ══════════════════════════════════════════════════════════════════════════════
+// WILLIAMS FRACTAL — SHORT-TERM (ST)
+// ══════════════════════════════════════════════════════════════════════════════
+bool st_up_down = true
+bool st_up_0    = true
+bool st_up_1    = true
+bool st_up_2    = true
+bool st_up_3    = true
+bool st_up_4    = true
+for i = 1 to fp_st
+    st_up_down := st_up_down and (high[fp_st - i] < high[fp_st])
+    st_up_0    := st_up_0    and (high[fp_st + i] < high[fp_st])
+    st_up_1    := st_up_1    and (high[fp_st + 1] <= high[fp_st] and high[fp_st + i + 1] < high[fp_st])
+    st_up_2    := st_up_2    and (high[fp_st + 1] <= high[fp_st] and high[fp_st + 2] <= high[fp_st] and high[fp_st + i + 2] < high[fp_st])
+    st_up_3    := st_up_3    and (high[fp_st + 1] <= high[fp_st] and high[fp_st + 2] <= high[fp_st] and high[fp_st + 3] <= high[fp_st] and high[fp_st + i + 3] < high[fp_st])
+    st_up_4    := st_up_4    and (high[fp_st + 1] <= high[fp_st] and high[fp_st + 2] <= high[fp_st] and high[fp_st + 3] <= high[fp_st] and high[fp_st + 4] <= high[fp_st] and high[fp_st + i + 4] < high[fp_st])
+st_up_flag = st_up_0 or st_up_1 or st_up_2 or st_up_3 or st_up_4
+st_upFrac  = st_up_down and st_up_flag
+
+bool st_dn_down = true
+bool st_dn_0    = true
+bool st_dn_1    = true
+bool st_dn_2    = true
+bool st_dn_3    = true
+bool st_dn_4    = true
+for i = 1 to fp_st
+    st_dn_down := st_dn_down and (low[fp_st - i] > low[fp_st])
+    st_dn_0    := st_dn_0    and (low[fp_st + i] > low[fp_st])
+    st_dn_1    := st_dn_1    and (low[fp_st + 1] >= low[fp_st] and low[fp_st + i + 1] > low[fp_st])
+    st_dn_2    := st_dn_2    and (low[fp_st + 1] >= low[fp_st] and low[fp_st + 2] >= low[fp_st] and low[fp_st + i + 2] > low[fp_st])
+    st_dn_3    := st_dn_3    and (low[fp_st + 1] >= low[fp_st] and low[fp_st + 2] >= low[fp_st] and low[fp_st + 3] >= low[fp_st] and low[fp_st + i + 3] > low[fp_st])
+    st_dn_4    := st_dn_4    and (low[fp_st + 1] >= low[fp_st] and low[fp_st + 2] >= low[fp_st] and low[fp_st + 3] >= low[fp_st] and low[fp_st + 4] >= low[fp_st] and low[fp_st + i + 4] > low[fp_st])
+st_dn_flag = st_dn_0 or st_dn_1 or st_dn_2 or st_dn_3 or st_dn_4
+st_dnFrac  = st_dn_down and st_dn_flag
+
+ph_st = st_upFrac and (not use_don_st or high[fp_st] > baseline[fp_st])
+pl_st = st_dnFrac and (not use_don_st or low[fp_st]  < baseline[fp_st])
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TRACK PIVOTS
+// ══════════════════════════════════════════════════════════════════════════════
+if ph_int
+    last_iph     := high[fp_int]
+    last_iph_bar := bar_index - fp_int
+
+if pl_int
+    last_ipl     := low[fp_int]
+    last_ipl_bar := bar_index - fp_int
+
+if pl_st
+    st_low2     := st_low1
+    st_low2_bar := st_low1_bar
+    st_low1     := low[fp_st]
+    st_low1_bar := bar_index - fp_st
+
+if ph_st
+    st_high2     := st_high1
+    st_high2_bar := st_high1_bar
+    st_high1     := high[fp_st]
+    st_high1_bar := bar_index - fp_st
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SETUPS — LONG & SHORT
+// ══════════════════════════════════════════════════════════════════════════════
+if pl_int and not na(last_iph_bar) and (bar_index - fp_int) > last_iph_bar and low[fp_int] < last_iph
+    long_setup_high := last_iph
+    long_setup_low  := low[fp_int]
+    long_target     := long_setup_high + (long_setup_high - long_setup_low)
+    long_setup_bar  := last_iph_bar
+
+if ph_int and not na(last_ipl_bar) and (bar_index - fp_int) > last_ipl_bar and high[fp_int] > last_ipl
+    short_setup_low  := last_ipl
+    short_setup_high := high[fp_int]
+    short_target     := short_setup_low - (short_setup_high - short_setup_low)
+    short_setup_bar  := last_ipl_bar
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STOP LOSS
+// ══════════════════════════════════════════════════════════════════════════════
+long_stop  = stop_mode == "Recent ST Low"   ? st_low1  : stop_mode == "2nd ST Low Back" ? st_low2  : stop_mode == "Next IT High" ? last_iph : st_low1
+short_stop = stop_mode == "Recent ST Low"   ? st_high1 : stop_mode == "2nd ST Low Back" ? st_high2 : stop_mode == "Next IT High" ? last_ipl : st_high1
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RISK / REWARD
+// ══════════════════════════════════════════════════════════════════════════════
+long_dist    = not na(long_setup_high)  and not na(long_setup_low)   ? long_setup_high  - long_setup_low  : na
+short_dist   = not na(short_setup_high) and not na(short_setup_low)  ? short_setup_high - short_setup_low : na
+long_risk    = not na(long_stop)  and not na(long_setup_low)   ? long_setup_low   - long_stop            : na
+long_reward  = not na(long_target) and not na(long_setup_low)  ? long_target      - long_setup_low       : na
+long_rr      = not na(long_risk)  and long_risk  > 0           ? long_reward      / long_risk             : na
+short_risk   = not na(short_stop) and not na(short_setup_high) ? short_stop       - short_setup_high     : na
+short_reward = not na(short_target) and not na(short_setup_high)? short_setup_high - short_target        : na
+short_rr     = not na(short_risk) and short_risk > 0           ? short_reward     / short_risk            : na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// POSITION SIZE
+// ══════════════════════════════════════════════════════════════════════════════
+tl_dollar_risk = tl_account * tl_risk_pct / 100.0
+
+f_tl_qty(entry, sl) =>
+    risk_pts = math.max(math.abs(entry - sl), 0.01)
+    math.max(0.01, math.round(tl_dollar_risk / (risk_pts * tl_point_val), 2))
+
+// ══════════════════════════════════════════════════════════════════════════════
+// WR + EMA
+// ══════════════════════════════════════════════════════════════════════════════
+ema_val = ta.ema(close, ema_len)
+wr_val  = ta.wpr(wr_len)
+
+ema_reclaim = close > ema_val and close[1] <= ema_val
+ema_reject  = close < ema_val and close[1] >= ema_val
+
+long_setup_active  = not na(long_target)  and close < long_target
+short_setup_active = not na(short_target) and close > short_target
+
+range_ok     = not range_filter or not is_expanded
+long_signal  = long_setup_active  and ema_reclaim and wr_val >= -20 and range_ok and barstate.isconfirmed
+short_signal = short_setup_active and ema_reject  and wr_val <= -80 and range_ok and barstate.isconfirmed
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PLOTS
+// ══════════════════════════════════════════════════════════════════════════════
+ema_color = close > ema_val ? color.new(color.lime, 0) : color.new(color.red, 0)
+plot(ema_val, "EMA", color=ema_color, linewidth=2)
+
+plotshape(long_signal,  "BUY Signal",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size=size.large)
+plotshape(short_signal, "SELL Signal", shape.triangledown, location.abovebar, color.new(color.red,  0), size=size.large)
+
+plotshape(ph_int, "IT High", shape.triangledown, location.abovebar, color.new(color.red,   0), size=size.small, offset=-fp_int)
+plotshape(pl_int, "IT Low",  shape.triangleup,   location.belowbar, color.new(color.lime,  0), size=size.small, offset=-fp_int)
+plotshape(ph_st,  "ST High", shape.triangledown, location.abovebar, color.new(color.red,  60), size=size.tiny,  offset=-fp_st)
+plotshape(pl_st,  "ST Low",  shape.triangleup,   location.belowbar, color.new(color.lime, 60), size=size.tiny,  offset=-fp_st)
+
+long_hit  = not na(long_target)  and high >= long_target
+short_hit = not na(short_target) and low  <= short_target
+plotshape(long_hit,  "Long Target Hit!",  shape.triangleup,   location.abovebar, color.yellow, size=size.large)
+plotshape(short_hit, "Short Target Hit!", shape.triangledown, location.belowbar, color.yellow, size=size.large)
+
+// Range phase background — one color per HTF session, no per-bar dots
+bgcolor(show_range_dots and is_contracted ? color.new(color.yellow, 70) : na, title="Range Contracted BG")
+bgcolor(show_range_dots and is_expanding  ? color.new(color.lime,   75) : na, title="Range Expanding BG")
+bgcolor(show_range_dots and is_expanded   ? color.new(color.red,    70) : na, title="Range Expanded BG")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS — JSON format required by TradeLocker bot
+// ══════════════════════════════════════════════════════════════════════════════
+sym = syminfo.ticker
+
+if long_signal
+    alert('{"secret":"tradelocker_dayrel_2026","action":"buy","symbol":"' + sym + '","entry":' + str.tostring(math.round(close, 2)) + ',"sl":' + str.tostring(math.round(long_stop, 2)) + ',"tp":' + str.tostring(math.round(long_target, 2)) + ',"risk_pct":' + str.tostring(tl_risk_pct) + '}', alert.freq_once_per_bar_close)
+if short_signal
+    alert('{"secret":"tradelocker_dayrel_2026","action":"sell","symbol":"' + sym + '","entry":' + str.tostring(math.round(close, 2)) + ',"sl":' + str.tostring(math.round(short_stop, 2)) + ',"tp":' + str.tostring(math.round(short_target, 2)) + ',"risk_pct":' + str.tostring(tl_risk_pct) + '}', alert.freq_once_per_bar_close)
+if long_hit
+    alert('{"secret":"tradelocker_dayrel_2026","action":"close","symbol":"' + sym + '","side":"buy","reason":"target_hit"}', alert.freq_once_per_bar)
+if short_hit
+    alert('{"secret":"tradelocker_dayrel_2026","action":"close","symbol":"' + sym + '","side":"sell","reason":"target_hit"}', alert.freq_once_per_bar)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DRAWINGS
+// ══════════════════════════════════════════════════════════════════════════════
+if barstate.islast
+    line.delete(ln_long_tgt)
+    label.delete(lb_long_tgt)
+    box.delete(bx_long)
+    line.delete(ln_long_stop)
+    label.delete(lb_long_stop)
+    line.delete(ln_short_tgt)
+    label.delete(lb_short_tgt)
+    box.delete(bx_short)
+    line.delete(ln_short_stop)
+    label.delete(lb_short_stop)
+    line.delete(ln_trail1)
+    line.delete(ln_trail2)
+    line.delete(ln_cyc_start)
+    label.delete(lb_cyc_start)
+    line.delete(ln_cyc_mid)
+    label.delete(lb_cyc_mid)
+    line.delete(ln_cyc_end)
+    label.delete(lb_cyc_end)
+
+    if not na(long_target)
+        ln_long_tgt := line.new(long_setup_bar, long_target, bar_index + 20, long_target,
+                                color=bull_col, width=2, style=line.style_dashed, extend=extend.right)
+        lb_long_tgt := label.new(bar_index + 5, long_target,
+                                 "▲ LW TARGET  " + str.tostring(math.round(long_target, 2)) +
+                                 "\n+" + str.tostring(math.round(long_dist, 1)) + " pts" +
+                                 (not na(long_rr) ? "  R:R " + str.tostring(math.round(long_rr, 1)) + ":1" : ""),
+                                 color=color.new(color.lime, 10), textcolor=color.white,
+                                 style=label.style_label_left, size=size.normal)
+        if show_box and not na(long_setup_bar)
+            bx_long := box.new(long_setup_bar, long_setup_high, bar_index + 20, long_setup_low,
+                               border_color=color.new(color.blue, 60), border_width=1,
+                               bgcolor=color.new(color.blue, 90))
+        if not na(long_stop)
+            ln_long_stop := line.new(bar_index - 30, long_stop, bar_index + 20, long_stop,
+                                     color=stop_col, width=2, style=line.style_solid, extend=extend.right)
+            lb_long_stop := label.new(bar_index + 5, long_stop,
+                                      "⛔ STOP  " + str.tostring(math.round(long_stop, 2)) + "\n" + stop_mode,
+                                      color=color.new(color.orange, 10), textcolor=color.white,
+                                      style=label.style_label_left, size=size.small)
+        if not na(st_low1) and not na(st_low1_bar)
+            ln_trail1 := line.new(st_low1_bar - 5, st_low1, bar_index + 20, st_low1,
+                                  color=trail_col, width=1, style=line.style_dotted, extend=extend.right)
+        if not na(st_low2) and not na(st_low2_bar)
+            ln_trail2 := line.new(st_low2_bar - 5, st_low2, st_low1_bar, st_low2,
+                                  color=color.new(color.yellow, 50), width=1, style=line.style_dotted)
+
+    if not na(short_target)
+        ln_short_tgt := line.new(short_setup_bar, short_target, bar_index + 20, short_target,
+                                 color=bear_col, width=2, style=line.style_dashed, extend=extend.right)
+        lb_short_tgt := label.new(bar_index + 5, short_target,
+                                  "▼ LW TARGET  " + str.tostring(math.round(short_target, 2)) +
+                                  "\n-" + str.tostring(math.round(short_dist, 1)) + " pts" +
+                                  (not na(short_rr) ? "  R:R " + str.tostring(math.round(short_rr, 1)) + ":1" : ""),
+                                  color=color.new(color.red, 10), textcolor=color.white,
+                                  style=label.style_label_left, size=size.normal)
+        if show_box and not na(short_setup_bar)
+            bx_short := box.new(short_setup_bar, short_setup_high, bar_index + 20, short_setup_low,
+                                border_color=color.new(color.red, 60), border_width=1,
+                                bgcolor=color.new(color.red, 90))
+        if not na(short_stop)
+            ln_short_stop := line.new(bar_index - 30, short_stop, bar_index + 20, short_stop,
+                                      color=stop_col, width=2, style=line.style_solid, extend=extend.right)
+            lb_short_stop := label.new(bar_index + 5, short_stop,
+                                       "⛔ STOP  " + str.tostring(math.round(short_stop, 2)) + "\n" + stop_mode,
+                                       color=color.new(color.orange, 10), textcolor=color.white,
+                                       style=label.style_label_left, size=size.small)
+
+    if show_cycle_lbl
+        ln_cyc_start := line.new(x1=cycle_start_t, y1=low * 0.997, x2=cycle_start_t, y2=high * 1.003,
+                                 xloc=xloc.bar_time, color=color.new(color.lime, 0),
+                                 width=3, style=line.style_solid)
+        lb_cyc_start := label.new(x=cycle_start_t, y=low * 0.996,
+                                  text="▼ EARNINGS LOW\n" + quarter_name + " — Day 1",
+                                  xloc=xloc.bar_time, yloc=yloc.price,
+                                  color=color.new(color.lime, 10), textcolor=color.white,
+                                  style=label.style_label_up, size=size.small)
+        mid_t = cycle_start_t + 49 * ONE_DAY_MS
+        ln_cyc_mid := line.new(x1=mid_t, y1=low * 0.997, x2=mid_t, y2=high * 1.003,
+                               xloc=xloc.bar_time, color=color.new(color.yellow, 20),
+                               width=2, style=line.style_dashed, extend=extend.both)
+        lb_cyc_mid := label.new(x=mid_t, y=high * 1.004,
+                                text="MID-CYCLE TOP\nDay 49",
+                                xloc=xloc.bar_time, yloc=yloc.price,
+                                color=color.new(color.yellow, 10), textcolor=color.black,
+                                style=label.style_label_down, size=size.small)
+        end_t = cycle_start_t + 91 * ONE_DAY_MS
+        ln_cyc_end := line.new(x1=end_t, y1=low * 0.997, x2=end_t, y2=high * 1.003,
+                               xloc=xloc.bar_time, color=color.new(color.purple, 20),
+                               width=3, style=line.style_dashed, extend=extend.both)
+        lb_cyc_end := label.new(x=end_t, y=high * 1.004,
+                                text="NEXT EARNINGS LOW\nNew Cycle",
+                                xloc=xloc.bar_time, yloc=yloc.price,
+                                color=color.new(color.purple, 10), textcolor=color.white,
+                                style=label.style_label_down, size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN DASHBOARD — top right  (19 rows: 0–18)
+// ══════════════════════════════════════════════════════════════════════════════
+if barstate.islast
+    var tbl = table.new(position.top_right, 2, 19,
+                        bgcolor=color.new(color.black, 10),
+                        border_color=color.new(color.gray, 55), border_width=1,
+                        frame_color=color.new(color.gray, 35), frame_width=1)
+
+    // Row 0 — header
+    table.cell(tbl, 0, 0, "LW SYSTEM", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 5))
+    table.cell(tbl, 1, 0, "[Dayrel]",  text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 5))
+
+    // Row 1 — setup bias
+    setup_txt = long_setup_active and short_setup_active ? "BOTH" : long_setup_active ? "LONG BIAS" : short_setup_active ? "SHORT BIAS" : "NO SETUP"
+    setup_col = long_setup_active and not short_setup_active ? color.lime : short_setup_active and not long_setup_active ? color.red : color.gray
+    table.cell(tbl, 0, 1, "SETUP",    text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 1, setup_txt,  text_color=setup_col,   text_size=size.small)
+
+    // Row 2 — WR
+    wr_col = wr_val >= -20 ? color.lime : wr_val <= -80 ? color.red : color.gray
+    wr_txt = wr_val >= -20 ? "OB " + str.tostring(math.round(wr_val, 1)) : wr_val <= -80 ? "OS " + str.tostring(math.round(wr_val, 1)) : str.tostring(math.round(wr_val, 1))
+    table.cell(tbl, 0, 2, "WR(" + str.tostring(wr_len) + ")", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 2, wr_txt,     text_color=wr_col,      text_size=size.small)
+
+    // Row 3 — EMA
+    ema_pos = close > ema_val ? "ABOVE ▲" : "BELOW ▼"
+    ema_col = close > ema_val ? color.lime : color.red
+    table.cell(tbl, 0, 3, "EMA(" + str.tostring(ema_len) + ")", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, ema_pos,    text_color=ema_col,      text_size=size.small)
+
+    // Row 4 — signal
+    sig_txt = long_signal ? "▲ BUY NOW" : short_signal ? "▼ SELL NOW" : ema_reclaim and long_setup_active ? "EMA RECLAIM" : ema_reject and short_setup_active ? "EMA REJECT" : is_expanded and range_filter ? "RANGE BLOCK" : "WAITING..."
+    sig_col = long_signal ? color.lime : short_signal ? color.red : ema_reclaim and long_setup_active ? color.yellow : ema_reject and short_setup_active ? color.orange : is_expanded and range_filter ? color.red : color.gray
+    table.cell(tbl, 0, 4, "SIGNAL",   text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 4, sig_txt,    text_color=sig_col,     text_size=size.small)
+
+    // Row 5 — range divider
+    table.cell(tbl, 0, 5, "─ RANGE ─", text_color=color.new(color.silver, 40), text_size=size.tiny)
+    table.cell(tbl, 1, 5, "─────────", text_color=color.new(color.silver, 40), text_size=size.tiny)
+
+    // Row 6 — range phase
+    table.cell(tbl, 0, 6, "PHASE",    text_color=color.white,       text_size=size.small)
+    table.cell(tbl, 1, 6, range_phase_name, text_color=range_phase_col, text_size=size.small)
+
+    // Row 7 — HTF cur/avg range
+    table.cell(tbl, 0, 7, range_tf + " RNG",  text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 7, str.tostring(math.round(htf_range, 1)) + " / " + str.tostring(math.round(avg_range, 1)) + " pts",
+               text_color=range_phase_col, text_size=size.small)
+
+    // Row 8 — long divider
+    table.cell(tbl, 0, 8, "── LONG ──", text_color=color.new(color.lime, 30), text_size=size.tiny)
+    table.cell(tbl, 1, 8, "─────────",  text_color=color.new(color.lime, 30), text_size=size.tiny)
+
+    // Row 9 — long target
+    table.cell(tbl, 0, 9, "TARGET",   text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 9, not na(long_target) ? str.tostring(math.round(long_target, 2)) : "—", text_color=color.lime, text_size=size.small)
+
+    // Row 10 — long stop
+    table.cell(tbl, 0, 10, "STOP",    text_color=color.white,  text_size=size.small)
+    table.cell(tbl, 1, 10, not na(long_stop) ? str.tostring(math.round(long_stop, 2)) : "—", text_color=color.orange, text_size=size.small)
+
+    // Row 11 — long R:R
+    table.cell(tbl, 0, 11, "R:R",     text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 11, not na(long_rr) ? str.tostring(math.round(long_rr, 1)) + " : 1" : "—",
+               text_color=not na(long_rr) and long_rr >= 2 ? color.lime : not na(long_rr) and long_rr >= 1 ? color.yellow : color.red, text_size=size.small)
+
+    // Row 12 — short divider
+    table.cell(tbl, 0, 12, "── SHORT ──", text_color=color.new(color.red, 30), text_size=size.tiny)
+    table.cell(tbl, 1, 12, "──────────",  text_color=color.new(color.red, 30), text_size=size.tiny)
+
+    // Row 13 — short target
+    table.cell(tbl, 0, 13, "TARGET",  text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 13, not na(short_target) ? str.tostring(math.round(short_target, 2)) : "—", text_color=color.red, text_size=size.small)
+
+    // Row 14 — short stop
+    table.cell(tbl, 0, 14, "STOP",    text_color=color.white,  text_size=size.small)
+    table.cell(tbl, 1, 14, not na(short_stop) ? str.tostring(math.round(short_stop, 2)) : "—", text_color=color.orange, text_size=size.small)
+
+    // Row 15 — account divider
+    cur_sl   = not na(long_stop) ? long_stop : not na(short_stop) ? short_stop : close - ta.atr(14)
+    tl_qty   = f_tl_qty(close, cur_sl)
+    is_tl    = active_acct == "TradeLocker"
+    acct_col = is_tl ? color.new(color.lime, 40) : color.new(color.aqua, 40)
+    table.cell(tbl, 0, 15, "── " + active_acct + " ──", text_color=acct_col, text_size=size.tiny)
+    table.cell(tbl, 1, 15, "────────────",               text_color=acct_col, text_size=size.tiny)
+
+    // Row 16 — risk $ or contracts
+    row16_lbl = is_tl ? "RISK $" : "CONTRACTS"
+    row16_val = is_tl ? "$" + str.tostring(math.round(tl_dollar_risk, 0)) + "  (" + str.tostring(tl_risk_pct) + "%)" : str.tostring(tv_contracts) + " contract" + (tv_contracts > 1 ? "s" : "") + "  (fixed)"
+    row16_col = is_tl ? color.orange : color.aqua
+    table.cell(tbl, 0, 16, row16_lbl, text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 16, row16_val, text_color=row16_col,   text_size=size.small)
+
+    // Row 17 — point value
+    table.cell(tbl, 0, 17, "PT VALUE", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 17, is_tl ? "$" + str.tostring(tl_point_val) + "/pt" : "$" + str.tostring(tv_point_val) + "/pt",
+               text_color=color.gray, text_size=size.small)
+
+    // Row 18 — size now
+    active_size = is_tl ? str.tostring(tl_qty) + " lot" + (tl_qty > 1 ? "s" : "") : str.tostring(tv_contracts) + " contract" + (tv_contracts > 1 ? "s" : "")
+    table.cell(tbl, 0, 18, "SIZE NOW",  text_color=color.white,  text_size=size.small)
+    table.cell(tbl, 1, 18, active_size, text_color=color.yellow, text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CYCLE DASHBOARD — bottom left
+// ══════════════════════════════════════════════════════════════════════════════
+if barstate.islast
+    var cyc_tbl = table.new(position.bottom_left, 2, 6,
+                            bgcolor=color.new(color.black, 10),
+                            border_color=color.new(color.gray, 55), border_width=1,
+                            frame_color=color.new(color.gray, 35), frame_width=1)
+
+    table.cell(cyc_tbl, 0, 0, "13-WK CYCLE",  text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 5))
+    table.cell(cyc_tbl, 1, 0, quarter_name,   text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 5))
+
+    table.cell(cyc_tbl, 0, 1, "PHASE",        text_color=color.white,   text_size=size.small)
+    table.cell(cyc_tbl, 1, 1, cyc_phase_name, text_color=cyc_phase_col, text_size=size.small)
+
+    table.cell(cyc_tbl, 0, 2, "CYCLE DAY",    text_color=color.white,   text_size=size.small)
+    table.cell(cyc_tbl, 1, 2, str.tostring(cycle_day) + " / 91", text_color=cyc_phase_col, text_size=size.small)
+
+    table.cell(cyc_tbl, 0, 3, "WEEK",         text_color=color.white,   text_size=size.small)
+    table.cell(cyc_tbl, 1, 3, str.tostring(cycle_week) + " / 13", text_color=cyc_phase_col, text_size=size.small)
+
+    table.cell(cyc_tbl, 0, 4, "DAYS LEFT",    text_color=color.white,   text_size=size.small)
+    table.cell(cyc_tbl, 1, 4, str.tostring(math.max(0, CYCLE_DAYS - cycle_day)) + " days", text_color=color.aqua, text_size=size.small)
+
+    next_q  = cycle_start_t + 91 * ONE_DAY_MS
+    next_dt = str.format_time(next_q, "MMM dd, yyyy", "America/New_York")
+    table.cell(cyc_tbl, 0, 5, "NEXT CYCLE",   text_color=color.white,   text_size=size.small)
+    table.cell(cyc_tbl, 1, 5, next_dt,        text_color=color.purple,  text_size=size.small)

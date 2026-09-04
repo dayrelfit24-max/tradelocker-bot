@@ -1,0 +1,223 @@
+//@version=6
+strategy("VWAP Institutional [Dayrel]", overlay=true,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=2,
+         initial_capital=10000, pyramiding=0, process_orders_on_close=true,
+         commission_type=strategy.commission.percent, commission_value=0.01,
+         max_labels_count=500, max_lines_count=200)
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+ema_len      = input.int(50,    "Trend EMA (50 = institutional standard)", minval=10,  maxval=200,  group="Trend")
+vwap_sd      = input.float(1.5, "VWAP Band Width (σ multiplier)",          minval=0.5, step=0.25,   group="VWAP")
+touch_mult   = input.float(0.4, "VWAP Touch Zone (ATR ×)",                 minval=0.1, step=0.05,   group="VWAP")
+rr_target    = input.float(2.5, "R:R Target",                              minval=1.0, step=0.25,   group="Trade")
+risk_pct     = input.float(2.0, "Risk % per Trade",                        minval=0.1, step=0.1,    group="Trade")
+atr_sl_mult  = input.float(1.5, "ATR SL Buffer Multiplier",                minval=0.5, step=0.1,    group="Trade")
+trail_r      = input.float(1.5, "Begin Trailing after × R profit",         minval=0.5, step=0.25,   group="Trade")
+vol_mult     = input.float(1.1, "Min Volume (× 20-bar avg)",               minval=0.5, step=0.1,    group="Filter")
+use_session  = input.bool(true,  "London + NY Session Filter",                                       group="Filter")
+show_bands   = input.bool(true,  "Show VWAP + Bands",                                                group="Display")
+show_bg      = input.bool(true,  "Show Trend Background",                                             group="Display")
+wh_secret    = input.string("tradelocker_dayrel_2026", "Webhook Secret",                             group="Webhook")
+
+// ─── Core Indicators ──────────────────────────────────────────────────────────
+// Session VWAP resets every trading day. The ±σ bands act as dynamic
+// support/resistance — exactly how Goldman and JPMorgan desks use them.
+[vwap_val, vwap_upper, vwap_lower] = ta.vwap(hlc3, timeframe.change("D"), vwap_sd)
+[vwap_v2, vwap_up2,   vwap_dn2  ] = ta.vwap(hlc3, timeframe.change("D"), vwap_sd * 2)
+
+ema50  = ta.ema(close, ema_len)
+atr14  = ta.atr(14)
+vol20  = ta.sma(volume, 20)
+
+// ─── VWAP Slope — is the VWAP itself trending? ───────────────────────────────
+// Ranging sessions = flat VWAP = no trade. Trend sessions = sloping VWAP = trade.
+vwap_slope_up   = vwap_val > vwap_val[3]
+vwap_slope_down = vwap_val < vwap_val[3]
+
+// ─── Session Filter (UTC) ─────────────────────────────────────────────────────
+// London open: 07:00–11:00 UTC | New York open: 12:30–16:00 UTC
+// These are the two highest-volume windows where institutional desks are active.
+utc_mins    = hour(time, "UTC") * 60 + minute(time, "UTC")
+london      = utc_mins >= 420  and utc_mins < 660    // 07:00–11:00
+new_york    = utc_mins >= 750  and utc_mins < 960    // 12:30–16:00
+in_session  = not use_session or (london or new_york)
+
+// ─── Trend Conditions ─────────────────────────────────────────────────────────
+// Institutional rule: price above VWAP AND above EMA50 = uptrend.
+// Require 2 consecutive bars to avoid whipsaws near the VWAP mid-line.
+bull_trend = close > vwap_val and ema50 > ema50[3] and close > ema50
+bear_trend = close < vwap_val and ema50 < ema50[3] and close < ema50
+
+// ─── VWAP Pullback + Reclaim Detection ───────────────────────────────────────
+// The "VWAP reclaim" is the most reliable institutional signal:
+//   LONG:  price was below VWAP (sellers briefly in control), then closes
+//          back ABOVE VWAP with volume — institutions absorbed the dip.
+//   SHORT: price was above VWAP (buyers briefly in control), then closes
+//          back BELOW VWAP with volume — institutions distributed into the rally.
+//
+// Also accepts a direct "touch-and-hold": low wicks into VWAP touch zone
+// but close stays above VWAP — the EMA acts as a floor.
+
+touch_zone = atr14 * touch_mult
+
+// LONG conditions
+prev_near_vwap_bull = low[1] <= vwap_val[1] + touch_zone   // previous bar touched VWAP zone
+curr_reclaim_bull   = close  > vwap_val                    // current bar closed above VWAP
+was_below_vwap      = low[1] < vwap_val[1]                 // genuinely dipped below
+
+// SHORT conditions
+prev_near_vwap_bear = high[1] >= vwap_val[1] - touch_zone  // previous bar touched VWAP zone
+curr_reclaim_bear   = close   < vwap_val                   // current bar closed below VWAP
+was_above_vwap      = high[1] > vwap_val[1]                // genuinely spiked above
+
+// Power candle: close in top 30% of bar range for longs, bottom 30% for shorts.
+// Weak doji candles at VWAP = indecision = skip.
+bar_range   = high - low
+power_bull  = bar_range > 0 and (close - low)  / bar_range >= 0.60
+power_bear  = bar_range > 0 and (high - close) / bar_range >= 0.60
+
+// Volume confirmation: the reclaim bar must show institutional participation.
+vol_ok = volume >= vol20 * vol_mult
+
+// ─── Entry Signals ────────────────────────────────────────────────────────────
+long_signal  = bull_trend and vwap_slope_up   and (prev_near_vwap_bull or was_below_vwap) and curr_reclaim_bull and power_bull and vol_ok and in_session and barstate.isconfirmed and strategy.position_size == 0
+short_signal = bear_trend and vwap_slope_down and (prev_near_vwap_bear or was_above_vwap) and curr_reclaim_bear and power_bear and vol_ok and in_session and barstate.isconfirmed and strategy.position_size == 0
+
+// ─── Trade Execution ──────────────────────────────────────────────────────────
+var float pos_sl    = na
+var float pos_tp    = na
+var float entry_ref = na
+var float risk_pts  = na
+
+if long_signal
+    entry_px  = close
+    // SL below the pullback low — the classic institutional placement.
+    // Using the lower VWAP band as a second reference: whichever is lower wins.
+    raw_sl    = math.min(low[1], low) - atr14 * atr_sl_mult
+    sl        = math.min(raw_sl, vwap_lower)
+    tp        = entry_px + rr_target * (entry_px - sl)
+    pos_sl   := sl
+    pos_tp   := tp
+    entry_ref := entry_px
+    risk_pts  := entry_px - sl
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", from_entry="Long", stop=sl, limit=tp)
+    label.new(bar_index, low - atr14 * 0.4,
+              "LONG\n" + str.tostring(entry_px, "#.####") + "\nSL " + str.tostring(sl, "#.####") + "\nTP " + str.tostring(tp, "#.####"),
+              color=color.green, textcolor=color.white, style=label.style_label_up, size=size.small)
+    alert('{"secret":"' + wh_secret + '","action":"buy","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entry_px, "#.##") + ',"sl":' + str.tostring(sl, "#.##") + ',"tp":' + str.tostring(tp, "#.##") + ',"risk_pct":' + str.tostring(risk_pct, "#.##") + '}', alert.freq_once_per_bar_close)
+
+if short_signal
+    entry_px  = close
+    raw_sl    = math.max(high[1], high) + atr14 * atr_sl_mult
+    sl        = math.max(raw_sl, vwap_upper)
+    tp        = entry_px - rr_target * (sl - entry_px)
+    pos_sl   := sl
+    pos_tp   := tp
+    entry_ref := entry_px
+    risk_pts  := sl - entry_px
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", from_entry="Short", stop=sl, limit=tp)
+    label.new(bar_index, high + atr14 * 0.4,
+              "SHORT\n" + str.tostring(entry_px, "#.####") + "\nSL " + str.tostring(sl, "#.####") + "\nTP " + str.tostring(tp, "#.####"),
+              color=color.red, textcolor=color.white, style=label.style_label_down, size=size.small)
+    alert('{"secret":"' + wh_secret + '","action":"sell","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entry_px, "#.##") + ',"sl":' + str.tostring(sl, "#.##") + ',"tp":' + str.tostring(tp, "#.##") + ',"risk_pct":' + str.tostring(risk_pct, "#.##") + '}', alert.freq_once_per_bar_close)
+
+// ─── ATR Trailing Stop (activates only after trail_r × R profit) ──────────────
+// Gives the trade room to develop before the trail kicks in.
+// Once active: trails at ATR × multiplier from close, never below breakeven.
+if strategy.position_size > 0 and not na(entry_ref) and not na(risk_pts)
+    profit_r = (close - entry_ref) / risk_pts
+    if profit_r >= trail_r
+        atr_trail = close - atr14 * atr_sl_mult
+        new_sl    = math.max(atr_trail, entry_ref)   // floor at breakeven
+        if new_sl > pos_sl
+            pos_sl := new_sl
+            strategy.exit("Long Exit", from_entry="Long", stop=pos_sl, limit=pos_tp)
+
+if strategy.position_size < 0 and not na(entry_ref) and not na(risk_pts)
+    profit_r = (entry_ref - close) / risk_pts
+    if profit_r >= trail_r
+        atr_trail = close + atr14 * atr_sl_mult
+        new_sl    = math.min(atr_trail, entry_ref)   // ceiling at breakeven
+        if new_sl < pos_sl
+            pos_sl := new_sl
+            strategy.exit("Short Exit", from_entry="Short", stop=pos_sl, limit=pos_tp)
+
+// ─── Trend-Flip Exit ─────────────────────────────────────────────────────────
+// Close the trade if the market structure inverts — don't ride a loser.
+if strategy.position_size > 0 and bear_trend
+    strategy.close("Long", comment="Trend flip")
+if strategy.position_size < 0 and bull_trend
+    strategy.close("Short", comment="Trend flip")
+
+// ─── VWAP + Band Plots ───────────────────────────────────────────────────────
+// White line = VWAP (fair value). Teal = ±1σ (first target/stop zone).
+// Dark teal = ±2σ (extended target / extreme zone).
+plot(show_bands ? vwap_val   : na, "VWAP",       color=color.new(color.white,  0),  linewidth=2)
+plot(show_bands ? vwap_upper : na, "VWAP +1σ",   color=color.new(color.teal,  20),  linewidth=1)
+plot(show_bands ? vwap_lower : na, "VWAP -1σ",   color=color.new(color.teal,  20),  linewidth=1)
+plot(show_bands ? vwap_up2   : na, "VWAP +2σ",   color=color.new(color.teal,  55),  linewidth=1, style=plot.style_linebr)
+plot(show_bands ? vwap_dn2   : na, "VWAP -2σ",   color=color.new(color.teal,  55),  linewidth=1, style=plot.style_linebr)
+plot(show_bands ? ema50      : na, "EMA 50",      color=color.new(color.yellow, 0),  linewidth=1)
+
+// Entry signal markers on the chart
+plotshape(long_signal,  "LONG",  shape.labelup,   location.belowbar, color.new(color.green, 0), text="L", textcolor=color.white, size=size.tiny)
+plotshape(short_signal, "SHORT", shape.labeldown, location.abovebar, color.new(color.red,   0), text="S", textcolor=color.white, size=size.tiny)
+
+// ─── Active SL / TP Lines ─────────────────────────────────────────────────────
+var line sl_active = na
+var line tp_active = na
+
+if strategy.position_size != 0 and not na(pos_sl)
+    line.delete(sl_active)
+    sl_active := line.new(bar_index - 1, pos_sl, bar_index + 80, pos_sl, color=color.red,  width=2, style=line.style_solid)
+if strategy.position_size != 0 and not na(pos_tp)
+    line.delete(tp_active)
+    tp_active := line.new(bar_index - 1, pos_tp, bar_index + 80, pos_tp, color=color.teal, width=2, style=line.style_dashed)
+if strategy.position_size == 0
+    line.delete(sl_active)
+    line.delete(tp_active)
+    sl_active := na
+    tp_active := na
+
+// ─── Trend Background ────────────────────────────────────────────────────────
+bgcolor(show_bg and bull_trend ? color.new(color.green, 94) : show_bg and bear_trend ? color.new(color.red, 94) : na, title="Trend Background")
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+var table dash = table.new(position.top_right, 2, 9,
+     bgcolor=color.new(color.black, 75), border_color=color.new(color.gray, 50),
+     border_width=1, frame_color=color.gray, frame_width=1)
+
+trend_txt  = bull_trend ? "BULLISH" : bear_trend ? "BEARISH" : "NEUTRAL"
+trend_col  = bull_trend ? color.lime : bear_trend ? color.red : color.gray
+pos_txt    = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT"
+pos_col    = strategy.position_size > 0 ? color.lime : strategy.position_size < 0 ? color.red : color.gray
+sess_txt   = in_session  ? "ACTIVE"  : "CLOSED"
+sess_col   = in_session  ? color.lime : color.gray
+vol_txt    = vol_ok      ? "STRONG"  : "WEAK"
+vol_col    = vol_ok      ? color.lime : color.orange
+slope_txt  = vwap_slope_up ? "UP ▲" : vwap_slope_down ? "DOWN ▼" : "FLAT ─"
+slope_col  = vwap_slope_up ? color.lime : vwap_slope_down ? color.red : color.gray
+above_vwap = close > vwap_val
+price_col  = above_vwap ? color.lime : color.red
+price_txt  = above_vwap ? "ABOVE VWAP" : "BELOW VWAP"
+
+table.cell(dash, 0, 0, "VWAP INSTITUTIONAL",                         text_color=color.white,  text_size=size.small, bgcolor=color.new(color.navy, 40))
+table.cell(dash, 1, 0, "[DAYREL]",                                   text_color=color.silver, text_size=size.small, bgcolor=color.new(color.navy, 40))
+table.cell(dash, 0, 1, "Trend",       text_color=color.gray,  text_size=size.tiny)
+table.cell(dash, 1, 1, trend_txt,     text_color=trend_col,   text_size=size.small)
+table.cell(dash, 0, 2, "Position",    text_color=color.gray,  text_size=size.tiny)
+table.cell(dash, 1, 2, pos_txt,       text_color=pos_col,     text_size=size.small)
+table.cell(dash, 0, 3, "Price vs VWAP", text_color=color.gray, text_size=size.tiny)
+table.cell(dash, 1, 3, price_txt,     text_color=price_col,   text_size=size.small)
+table.cell(dash, 0, 4, "VWAP Slope",  text_color=color.gray,  text_size=size.tiny)
+table.cell(dash, 1, 4, slope_txt,     text_color=slope_col,   text_size=size.small)
+table.cell(dash, 0, 5, "Volume",      text_color=color.gray,  text_size=size.tiny)
+table.cell(dash, 1, 5, vol_txt,       text_color=vol_col,     text_size=size.small)
+table.cell(dash, 0, 6, "Session",     text_color=color.gray,  text_size=size.tiny)
+table.cell(dash, 1, 6, sess_txt,      text_color=sess_col,    text_size=size.small)
+table.cell(dash, 0, 7, "VWAP",        text_color=color.gray,  text_size=size.tiny)
+table.cell(dash, 1, 7, str.tostring(vwap_val,   "#.####"),    text_color=color.white, text_size=size.small)
+table.cell(dash, 0, 8, "±1σ Bands",   text_color=color.gray,  text_size=size.tiny)
+table.cell(dash, 1, 8, str.tostring(vwap_upper, "#.####") + " / " + str.tostring(vwap_lower, "#.####"), text_color=color.teal, text_size=size.tiny)

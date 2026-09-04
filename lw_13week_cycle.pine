@@ -1,0 +1,107 @@
+//@version=6
+indicator("LW 13-Week Cycle [Dayrel]", overlay=false, max_lines_count=500)
+
+// ── INPUTS ────────────────────────────────────────────────────────────────────
+cycle_start_ts = input.time(timestamp("2026-08-03 00:00 +0000"), "Cycle Start Date (last major low)")
+show_labels    = input.bool(true,  "Show Phase Labels")
+show_lines     = input.bool(true,  "Show Cycle Milestone Lines")
+show_bg        = input.bool(true,  "Show Phase Background Colors")
+
+// ── CYCLE MATH ────────────────────────────────────────────────────────────────
+CYCLE_BARS = 91  // 13 weeks × 7 days (calendar)
+
+// Convert timestamp to bar offset — we work in days
+bars_per_day = timeframe.multiplier <= 60 ? (1440 / timeframe.multiplier) : 1
+
+cycle_day_raw = math.floor((time - cycle_start_ts) / 86400000) + 1
+cycle_day     = cycle_day_raw
+cycle_week    = math.ceil(cycle_day / 7.0)
+cycle_pct     = cycle_day / CYCLE_BARS * 100.0
+
+// Normalize 0–100 for the oscillator display
+osc_val = math.min(100, math.max(0, cycle_pct))
+
+// Phase boundaries (days)
+EARLY_END  = 20
+MID_START  = 38
+MID_END    = 55
+LATE_END   = 75
+CYCLE_END  = CYCLE_BARS
+
+phase_color =
+  cycle_day <= 0        ? color.gray :
+  cycle_day <= EARLY_END  ? color.new(color.green,  0) :
+  cycle_day <= MID_START  ? color.new(color.blue,   0) :
+  cycle_day <= MID_END    ? color.new(color.yellow, 0) :
+  cycle_day <= LATE_END   ? color.new(color.red,    0) :
+  cycle_day <= CYCLE_END  ? color.new(color.purple, 0) :
+  color.gray
+
+phase_name =
+  cycle_day <= 0          ? "PRE-CYCLE"       :
+  cycle_day <= EARLY_END  ? "EARLY BULL"      :
+  cycle_day <= MID_START  ? "TRENDING UP"     :
+  cycle_day <= MID_END    ? "MID-CYCLE TOP"   :
+  cycle_day <= LATE_END   ? "LATE BEAR"       :
+  cycle_day <= CYCLE_END  ? "CYCLE END / LOW" :
+  "NEW CYCLE"
+
+// ── PLOTS ─────────────────────────────────────────────────────────────────────
+// Background phase shading
+bgcolor(show_bg and cycle_day > 0 and cycle_day <= EARLY_END  ? color.new(color.green,  88) : na, title="Early Bull BG")
+bgcolor(show_bg and cycle_day > EARLY_END and cycle_day <= MID_START ? color.new(color.blue,   88) : na, title="Trending BG")
+bgcolor(show_bg and cycle_day > MID_START and cycle_day <= MID_END   ? color.new(color.yellow, 88) : na, title="Mid-Top BG")
+bgcolor(show_bg and cycle_day > MID_END   and cycle_day <= LATE_END  ? color.new(color.red,    88) : na, title="Late Bear BG")
+bgcolor(show_bg and cycle_day > LATE_END  and cycle_day <= CYCLE_END ? color.new(color.purple, 88) : na, title="Cycle End BG")
+
+// Oscillator bar — shows cycle progress 0→100
+plot(cycle_day > 0 and cycle_day <= CYCLE_BARS ? osc_val : na,
+     "Cycle %", color=phase_color, style=plot.style_columns, linewidth=1)
+
+// Zero/midline reference
+hline(0,   "Zero",    color=color.new(color.gray, 70), linestyle=hline.style_solid)
+hline(50,  "Mid",     color=color.new(color.gray, 50), linestyle=hline.style_dashed)
+hline(100, "Max",     color=color.new(color.gray, 70), linestyle=hline.style_solid)
+
+// Milestone lines at key phase transitions
+if show_lines and barstate.islast
+    // Mid-cycle top zone
+    line.new(bar_index - 10, 42, bar_index + 10, 42, color=color.new(color.yellow, 40), width=1, style=line.style_dashed, extend=extend.both)
+    line.new(bar_index - 10, 60, bar_index + 10, 60, color=color.new(color.yellow, 40), width=1, style=line.style_dashed, extend=extend.both)
+    // Late-bear / cycle end
+    line.new(bar_index - 10, 82, bar_index + 10, 82, color=color.new(color.purple, 40), width=1, style=line.style_dashed, extend=extend.both)
+
+// Label on last bar
+if show_labels and barstate.islast and cycle_day > 0 and cycle_day <= CYCLE_BARS
+    label.new(bar_index, osc_val + 3,
+              "Day " + str.tostring(cycle_day) + " / 91  |  Wk " + str.tostring(cycle_week) + " / 13  |  " + phase_name,
+              color=color.new(phase_color, 20),
+              textcolor=color.white,
+              style=label.style_label_down,
+              size=size.normal)
+
+// ── DASHBOARD ─────────────────────────────────────────────────────────────────
+if barstate.islast
+    var tbl = table.new(position.top_right, 2, 6,
+                        bgcolor=color.new(color.black, 15),
+                        border_color=color.new(color.gray, 60), border_width=1,
+                        frame_color=color.new(color.gray, 40), frame_width=1)
+
+    table.cell(tbl, 0, 0, "13-WEEK CYCLE",  text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 10))
+    table.cell(tbl, 1, 0, "LW [Dayrel]",    text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 10))
+
+    table.cell(tbl, 0, 1, "CYCLE DAY",   text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 1, str.tostring(cycle_day) + " / 91", text_color=phase_color, text_size=size.small)
+
+    table.cell(tbl, 0, 2, "WEEK",        text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 2, str.tostring(cycle_week) + " / 13", text_color=phase_color, text_size=size.small)
+
+    table.cell(tbl, 0, 3, "PROGRESS",    text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, str.tostring(math.round(cycle_pct, 1)) + "%", text_color=phase_color, text_size=size.small)
+
+    table.cell(tbl, 0, 4, "PHASE",       text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 4, phase_name,    text_color=phase_color, text_size=size.small)
+
+    days_left = CYCLE_BARS - cycle_day
+    table.cell(tbl, 0, 5, "DAYS LEFT",   text_color=color.white,  text_size=size.small)
+    table.cell(tbl, 1, 5, str.tostring(math.max(0, days_left)) + " days", text_color=color.aqua, text_size=size.small)

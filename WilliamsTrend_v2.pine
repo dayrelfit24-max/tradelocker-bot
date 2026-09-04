@@ -1,0 +1,184 @@
+//@version=6
+strategy("Williams Trend Engine v2 [Dayrel]", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=2, initial_capital=10000, pyramiding=0, process_orders_on_close=true, commission_type=strategy.commission.percent, commission_value=0.01, max_labels_count=500, max_lines_count=200)
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+ema_fast    = input.int(21,    "Fast EMA",                minval=5,   maxval=100, group="Trend")
+ema_slow    = input.int(50,    "Slow EMA",                minval=10,  maxval=300, group="Trend")
+ema_trend   = input.int(200,   "Master Trend EMA",        minval=50,  maxval=500, group="Trend")
+trend_bars  = input.int(10,    "Bars price must hold trend EMA", minval=3, maxval=50, group="Trend")
+wr_len      = input.int(14,    "Williams %%R Length",     minval=5,   maxval=50,  group="Momentum")
+adx_len     = input.int(14,    "ADX Length",              minval=5,   maxval=50,  group="Momentum")
+adx_min     = input.int(25,    "Min ADX (trend strength)",minval=10,  maxval=60,  group="Momentum")
+rr_target   = input.float(3.0, "R:R Target",              minval=1.0, step=0.5,   group="Trade")
+risk_pct    = input.float(2.0, "Risk %% per Trade",       minval=0.1, step=0.1,   group="Trade")
+atr_sl_mult = input.float(1.2, "ATR SL Multiplier",       minval=0.5, step=0.1,   group="Trade")
+trail_start = input.float(1.5, "Trail after X × R profit",minval=1.0, step=0.25,  group="Trade")
+use_session = input.bool(true,  "US Market Hours Only (9:30–15:30 ET)", group="Filter")
+show_emas   = input.bool(true,  "Show EMAs",               group="Display")
+show_bg     = input.bool(true,  "Show Trend Background",   group="Display")
+wh_secret   = input.string("tradelocker_dayrel_2026", "Webhook Secret", group="Webhook")
+
+// ─── Indicators ───────────────────────────────────────────────────────────────
+ema_f  = ta.ema(close, ema_fast)
+ema_s  = ta.ema(close, ema_slow)
+ema_t  = ta.ema(close, ema_trend)
+wr     = ta.wpr(wr_len)
+atr14  = ta.atr(14)
+[_, _, adx_val] = ta.dmi(adx_len, adx_len)
+
+// ─── Session Filter (US market hours, ET) ─────────────────────────────────────
+in_session = not use_session or (hour(time, "America/New_York") * 60 + minute(time, "America/New_York") >= 570 and hour(time, "America/New_York") * 60 + minute(time, "America/New_York") < 930)
+
+// ─── Trend Conditions ─────────────────────────────────────────────────────────
+// Price must be above/below master EMA for at least trend_bars consecutive bars
+// This eliminates false crossovers and choppy price around the EMA
+above_trend = close > ema_t
+below_trend = close < ema_t
+
+bars_above = 0
+bars_below = 0
+for i = 0 to trend_bars - 1
+    if close[i] > ema_t[i]
+        bars_above += 1
+    if close[i] < ema_t[i]
+        bars_below += 1
+
+trend_up   = bars_above >= trend_bars and ema_f > ema_s and adx_val >= adx_min
+trend_down = bars_below >= trend_bars and ema_f < ema_s and adx_val >= adx_min
+
+// ─── Williams %R Pullback Quality Filter ─────────────────────────────────────
+// LONG:  WR must have been truly oversold (< -80) within the last wr_len bars
+//        THEN cross back above -50. This is a genuine pullback, not chart noise.
+// SHORT: WR must have been truly overbought (> -20) then cross back below -50.
+wr_was_os = ta.lowest(wr, wr_len) <= -80
+wr_was_ob = ta.highest(wr, wr_len) >= -20
+
+// ─── Power Bar Confirmation ───────────────────────────────────────────────────
+// Entry bar must close in top 25% of its range for longs (shows conviction).
+// Bottom 25% for shorts. Filters weak, indecisive candles.
+bar_range  = high - low
+power_bull = bar_range > 0 and (close - low)  / bar_range >= 0.65
+power_bear = bar_range > 0 and (high - close) / bar_range >= 0.65
+
+// ─── Entry Signals ────────────────────────────────────────────────────────────
+long_signal  = trend_up   and wr_was_os and ta.crossover(wr,  -50) and power_bull and in_session and strategy.position_size == 0 and barstate.isconfirmed
+short_signal = trend_down and wr_was_ob and ta.crossunder(wr, -50) and power_bear and in_session and strategy.position_size == 0 and barstate.isconfirmed
+
+// ─── Trade Execution ──────────────────────────────────────────────────────────
+var float pos_sl    = na
+var float pos_tp    = na
+var float entry_ref = na
+var float risk_pts  = na
+
+if long_signal
+    entry_px  = close
+    sl        = low  - atr14 * atr_sl_mult
+    tp        = entry_px + rr_target * (entry_px - sl)
+    pos_sl   := sl
+    pos_tp   := tp
+    entry_ref := entry_px
+    risk_pts  := entry_px - sl
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", from_entry="Long", stop=sl, limit=tp)
+    alert('{"secret":"' + wh_secret + '","action":"buy","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entry_px, "#.##") + ',"sl":' + str.tostring(sl, "#.##") + ',"tp":' + str.tostring(tp, "#.##") + ',"risk_pct":' + str.tostring(risk_pct, "#.##") + '}', alert.freq_once_per_bar_close)
+
+if short_signal
+    entry_px  = close
+    sl        = high + atr14 * atr_sl_mult
+    tp        = entry_px - rr_target * (sl - entry_px)
+    pos_sl   := sl
+    pos_tp   := tp
+    entry_ref := entry_px
+    risk_pts  := sl - entry_px
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", from_entry="Short", stop=sl, limit=tp)
+    alert('{"secret":"' + wh_secret + '","action":"sell","symbol":"' + syminfo.ticker + '","entry":' + str.tostring(entry_px, "#.##") + ',"sl":' + str.tostring(sl, "#.##") + ',"tp":' + str.tostring(tp, "#.##") + ',"risk_pct":' + str.tostring(risk_pct, "#.##") + '}', alert.freq_once_per_bar_close)
+
+// ─── Trailing Stop (only activates after trail_start × R) ────────────────────
+// Gives trade room to breathe before the trail kicks in.
+// Once activated: trail at ATR × multiplier from current close.
+if strategy.position_size > 0 and not na(entry_ref) and not na(risk_pts)
+    profit_r  = (close - entry_ref) / risk_pts
+    if profit_r >= trail_start
+        atr_trail = close - atr14 * atr_sl_mult
+        be_floor  = entry_ref  // never trail below breakeven
+        new_sl    = math.max(atr_trail, be_floor)
+        if new_sl > pos_sl
+            pos_sl := new_sl
+            strategy.exit("Long Exit", from_entry="Long", stop=pos_sl, limit=pos_tp)
+
+if strategy.position_size < 0 and not na(entry_ref) and not na(risk_pts)
+    profit_r  = (entry_ref - close) / risk_pts
+    if profit_r >= trail_start
+        atr_trail = close + atr14 * atr_sl_mult
+        be_floor  = entry_ref
+        new_sl    = math.min(atr_trail, be_floor)
+        if new_sl < pos_sl
+            pos_sl := new_sl
+            strategy.exit("Short Exit", from_entry="Short", stop=pos_sl, limit=pos_tp)
+
+// ─── Trend-Flip Exit ──────────────────────────────────────────────────────────
+if strategy.position_size > 0 and trend_down
+    strategy.close("Long", comment="Trend flip")
+
+if strategy.position_size < 0 and trend_up
+    strategy.close("Short", comment="Trend flip")
+
+// ─── Plots ────────────────────────────────────────────────────────────────────
+plot(show_emas ? ema_f : na, "EMA 21",  color=color.new(color.yellow, 0),  linewidth=1)
+plot(show_emas ? ema_s : na, "EMA 50",  color=color.new(color.orange, 0),  linewidth=1)
+plot(show_emas ? ema_t : na, "EMA 200", color=color.new(color.white,  10), linewidth=2)
+
+// Entry signals — plotshape fires on the signal bar, NO offset, always on candle
+plotshape(long_signal,  "LONG",  shape.labelup,   location.belowbar, color.new(color.green, 20), text="LONG",  textcolor=color.white, size=size.small)
+plotshape(short_signal, "SHORT", shape.labeldown, location.abovebar, color.new(color.red,   20), text="SHORT", textcolor=color.white, size=size.small)
+
+// ─── Active SL / TP Lines ─────────────────────────────────────────────────────
+var line sl_active = na
+var line tp_active = na
+
+if strategy.position_size != 0 and not na(pos_sl)
+    line.delete(sl_active)
+    sl_active := line.new(bar_index - 1, pos_sl, bar_index + 100, pos_sl, color=color.red,  width=2, style=line.style_solid)
+if strategy.position_size != 0 and not na(pos_tp)
+    line.delete(tp_active)
+    tp_active := line.new(bar_index - 1, pos_tp, bar_index + 100, pos_tp, color=color.teal, width=2, style=line.style_dashed)
+if strategy.position_size == 0
+    line.delete(sl_active)
+    line.delete(tp_active)
+    sl_active := na
+    tp_active := na
+
+// ─── Trend Background ─────────────────────────────────────────────────────────
+bgcolor(show_bg and trend_up   ? color.new(color.green, 93) : show_bg and trend_down ? color.new(color.red, 93) : na, title="Trend Background")
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+var table dash = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 75), border_color=color.new(color.gray, 50), border_width=1, frame_color=color.gray, frame_width=1)
+
+trend_txt = trend_up ? "BULLISH" : trend_down ? "BEARISH" : "NEUTRAL"
+trend_col = trend_up ? color.lime : trend_down ? color.red : color.gray
+pos_txt   = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT"
+pos_col   = strategy.position_size > 0 ? color.lime : strategy.position_size < 0 ? color.red : color.gray
+adx_col   = adx_val >= adx_min ? color.lime : color.orange
+wr_col    = wr <= -80 ? color.lime : wr >= -20 ? color.red : color.gray
+sess_col  = in_session ? color.lime : color.gray
+sess_txt  = in_session ? "OPEN" : "CLOSED"
+
+table.cell(dash, 0, 0, "WILLIAMS v2",                              text_color=color.white,  text_size=size.small, bgcolor=color.new(color.navy, 40))
+table.cell(dash, 1, 0, "[DAYREL]",                                 text_color=color.silver, text_size=size.small, bgcolor=color.new(color.navy, 40))
+table.cell(dash, 0, 1, "Trend",                                    text_color=color.gray,   text_size=size.tiny)
+table.cell(dash, 1, 1, trend_txt,                                  text_color=trend_col,    text_size=size.small)
+table.cell(dash, 0, 2, "Position",                                 text_color=color.gray,   text_size=size.tiny)
+table.cell(dash, 1, 2, pos_txt,                                    text_color=pos_col,      text_size=size.small)
+table.cell(dash, 0, 3, "ADX",                                      text_color=color.gray,   text_size=size.tiny)
+table.cell(dash, 1, 3, str.tostring(math.round(adx_val, 1)),       text_color=adx_col,      text_size=size.small)
+table.cell(dash, 0, 4, "Williams %R",                              text_color=color.gray,   text_size=size.tiny)
+table.cell(dash, 1, 4, str.tostring(math.round(wr, 1)),            text_color=wr_col,       text_size=size.small)
+table.cell(dash, 0, 5, "WR Pullback",                              text_color=color.gray,   text_size=size.tiny)
+table.cell(dash, 1, 5, wr_was_os ? "READY L" : wr_was_ob ? "READY S" : "waiting", text_color=wr_was_os ? color.lime : wr_was_ob ? color.red : color.gray, text_size=size.small)
+table.cell(dash, 0, 6, "Session",                                  text_color=color.gray,   text_size=size.tiny)
+table.cell(dash, 1, 6, sess_txt,                                   text_color=sess_col,     text_size=size.small)
+table.cell(dash, 0, 7, "EMA 21 / 50",                              text_color=color.gray,   text_size=size.tiny)
+table.cell(dash, 1, 7, str.tostring(math.round(ema_f, 0)) + " / " + str.tostring(math.round(ema_s, 0)), text_color=color.yellow, text_size=size.small)
+table.cell(dash, 0, 8, "EMA 200",                                  text_color=color.gray,   text_size=size.tiny)
+table.cell(dash, 1, 8, str.tostring(math.round(ema_t, 0)),         text_color=color.white,  text_size=size.small)

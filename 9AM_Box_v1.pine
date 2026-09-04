@@ -1,0 +1,146 @@
+//@version=6
+indicator("9AM EST Box [Dayrel]", overlay=true, max_boxes_count=20, max_lines_count=200, max_labels_count=50)
+
+// ─── Inputs ──────────────────────────────────────────────────────────────────
+rr         = input.float(1.5,   "Risk:Reward Target",  minval=0.5, step=0.1)
+risk_pct   = input.float(1.0,   "Risk % per trade",    minval=0.1, step=0.1)
+wh_secret  = input.string("tradelocker_dayrel_2026", "Webhook Secret")
+
+// ─── State ───────────────────────────────────────────────────────────────────
+var float nine_high    = na
+var float nine_low     = na
+var int   nine_bar     = na
+var float scan_low     = na
+var float scan_high    = na
+var bool  done_today   = false
+
+var bool  long_armed   = false
+var bool  short_armed  = false
+var float long_entry   = na
+var float long_sl      = na
+var float long_tp      = na
+var float short_entry  = na
+var float short_sl     = na
+var float short_tp     = na
+
+// ─── 9 AM EST candle detection ───────────────────────────────────────────────
+is_9am = hour(time, "America/New_York") == 9 and minute(time, "America/New_York") == 0
+
+if is_9am
+    nine_high   := high
+    nine_low    := low
+    nine_bar    := bar_index
+    scan_low    := low
+    scan_high   := high
+    done_today  := false
+    long_armed  := false
+    short_armed := false
+    long_entry  := na
+    long_sl     := na
+    long_tp     := na
+    short_entry := na
+    short_sl    := na
+    short_tp    := na
+
+bgcolor(is_9am ? color.new(color.yellow, 88) : na, title="9AM Candle")
+
+// ─── Phase 1: scan for breakout ──────────────────────────────────────────────
+if not na(nine_bar) and bar_index > nine_bar and not done_today
+    scan_low  := math.min(scan_low,  low)
+    scan_high := math.max(scan_high, high)
+
+    // ── LONG: confirmed close above 9am high ──────────────────────────────────
+    if close > nine_high and barstate.isconfirmed
+        done_today := true
+        long_armed := true
+        long_entry := nine_high
+        long_sl    := scan_low
+        long_tp    := nine_high + rr * (nine_high - scan_low)
+
+        box.new(nine_bar, nine_high, bar_index, scan_low,
+                border_color=color.green, border_width=2,
+                bgcolor=color.new(color.green, 85))
+
+        line.new(bar_index, long_entry, bar_index + 300, long_entry,
+                 color=color.green, width=2, style=line.style_dotted)
+        line.new(bar_index, long_sl,    bar_index + 300, long_sl,
+                 color=color.red,   width=1, style=line.style_dashed)
+        line.new(bar_index, long_tp,    bar_index + 300, long_tp,
+                 color=color.teal,  width=1, style=line.style_dashed)
+
+        label.new(bar_index, long_entry, " Wait for retrace...",
+                  color=color.gray,  textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+        label.new(bar_index, long_sl,    " SL",
+                  color=color.red,   textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+        label.new(bar_index, long_tp,    " TP " + str.tostring(rr) + "R",
+                  color=color.teal,  textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+
+    // ── SHORT: confirmed close below 9am low ──────────────────────────────────
+    else if close < nine_low and barstate.isconfirmed
+        done_today  := true
+        short_armed := true
+        short_entry := nine_low
+        short_sl    := scan_high
+        short_tp    := nine_low - rr * (scan_high - nine_low)
+
+        box.new(nine_bar, scan_high, bar_index, nine_low,
+                border_color=color.red, border_width=2,
+                bgcolor=color.new(color.red, 85))
+
+        line.new(bar_index, short_entry, bar_index + 300, short_entry,
+                 color=color.red,  width=2, style=line.style_dotted)
+        line.new(bar_index, short_sl,    bar_index + 300, short_sl,
+                 color=color.red,  width=1, style=line.style_dashed)
+        line.new(bar_index, short_tp,    bar_index + 300, short_tp,
+                 color=color.teal, width=1, style=line.style_dashed)
+
+        label.new(bar_index, short_entry, " Wait for retrace...",
+                  color=color.gray,  textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+        label.new(bar_index, short_sl,    " SL",
+                  color=color.red,   textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+        label.new(bar_index, short_tp,    " TP " + str.tostring(rr) + "R",
+                  color=color.teal,  textcolor=color.white,
+                  style=label.style_label_right, size=size.small)
+
+// ─── Phase 2: entry signal when price retraces to entry zone ─────────────────
+
+// LONG: price retraces and touches/crosses the 9am high
+if long_armed and low <= long_entry and barstate.isconfirmed
+    long_armed := false
+    label.new(bar_index, low, "▲ LONG",
+              color=color.green, textcolor=color.white,
+              style=label.style_label_up, size=size.normal)
+
+    // Fire webhook alert
+    msg = '{"secret":"' + wh_secret + '"' +
+          ',"action":"buy"' +
+          ',"symbol":"' + syminfo.ticker + '"' +
+          ',"entry":' + str.tostring(long_entry, "#.##") +
+          ',"sl":'    + str.tostring(long_sl,    "#.##") +
+          ',"tp":'    + str.tostring(long_tp,    "#.##") +
+          ',"risk_pct":' + str.tostring(risk_pct, "#.##") +
+          '}'
+    alert(msg, alert.freq_once_per_bar_close)
+
+// SHORT: price retraces and touches/crosses the 9am low
+if short_armed and high >= short_entry and barstate.isconfirmed
+    short_armed := false
+    label.new(bar_index, high, "▼ SHORT",
+              color=color.red,   textcolor=color.white,
+              style=label.style_label_down, size=size.normal)
+
+    // Fire webhook alert
+    msg = '{"secret":"' + wh_secret + '"' +
+          ',"action":"sell"' +
+          ',"symbol":"' + syminfo.ticker + '"' +
+          ',"entry":' + str.tostring(short_entry, "#.##") +
+          ',"sl":'    + str.tostring(short_sl,    "#.##") +
+          ',"tp":'    + str.tostring(short_tp,    "#.##") +
+          ',"risk_pct":' + str.tostring(risk_pct, "#.##") +
+          '}'
+    alert(msg, alert.freq_once_per_bar_close)
