@@ -363,6 +363,15 @@ tbody td{padding:10px 14px;font-size:12.5px;white-space:nowrap}
 
   <!-- ── REPORTS ── -->
   <div id="view-reports" class="view">
+    <div class="chart-card" style="margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="font-size:11px;color:var(--text3);font-weight:700;letter-spacing:.4px">STRATEGY</div>
+      <select id="rpt-strategy" onchange="setStrategy(this.value)"
+              style="background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:6px 12px;font-size:12px;outline:none;min-width:180px">
+        <option value="all">All strategies</option>
+      </select>
+      <div id="rpt-strategy-note" style="font-size:11px;color:var(--text3);flex:1;min-width:200px"></div>
+    </div>
+    <div id="rpt-strategy-summary"></div>
     <div class="reports-grid">
       <div class="report-card">
         <div class="report-title">By Symbol</div>
@@ -458,6 +467,7 @@ const EMBEDDED_TRADES = [];
 const S = {
   period: 'month',
   broker: 'all',
+  strategy: 'all',
   page: 1,
   pageSize: 50,
   sortCol: 'date',
@@ -851,8 +861,70 @@ function renderCalendar(){
 }
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────
+function setStrategy(v){ S.strategy=v; renderReports(); }
+
+// Strategies present in the data, most-traded first. Trades placed before the
+// bot recorded which indicator fired carry no attribution, so they are grouped
+// under a single explicit bucket rather than silently mixed in.
+function strategyList(){
+  const counts={};
+  EMBEDDED_TRADES.forEach(t=>{
+    const k=t.strategy||'unknown';
+    counts[k]=(counts[k]||0)+1;
+  });
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+}
+
+function populateStrategyFilter(){
+  const sel=document.getElementById('rpt-strategy');
+  if(!sel) return;
+  const cur=S.strategy;
+  const list=strategyList();
+  sel.innerHTML=`<option value="all">All strategies (${EMBEDDED_TRADES.length})</option>`+
+    list.map(([k,n])=>`<option value="${k}">${k==='unknown'?'Unattributed':k} (${n})</option>`).join('');
+  sel.value=cur;
+  if(sel.value!==cur){ S.strategy='all'; sel.value='all'; }
+}
+
 function renderReports(){
-  const trades=filtered();
+  populateStrategyFilter();
+  const trades=filtered().filter(t=>S.strategy==='all'||(t.strategy||'unknown')===S.strategy);
+
+  // Say plainly what the numbers below cover, and warn when the sample is too
+  // small to read anything into.
+  const note=document.getElementById('rpt-strategy-note');
+  if(note){
+    if(S.strategy==='all'){
+      note.textContent=`Showing all ${trades.length} trades in the selected period.`;
+    }else if(S.strategy==='unknown'){
+      note.textContent=`${trades.length} trades placed before signal attribution existed — no indicator is known for these.`;
+    }else{
+      note.innerHTML=`${trades.length} trades from <strong>${S.strategy}</strong> in the selected period.`+
+        (trades.length<30?` <span style="color:#f59e0b">Small sample — treat these as provisional.</span>`:'');
+    }
+  }
+
+  // Headline stats for the selected strategy
+  const sum=document.getElementById('rpt-strategy-summary');
+  if(sum){
+    if(!trades.length){
+      sum.innerHTML=`<div class="chart-card" style="margin-bottom:16px;padding:20px;text-align:center;color:var(--text3);font-size:12px">No trades for this strategy in the selected period.</div>`;
+    }else{
+      const st=calcStats(trades);
+      const cell=(label,val,cls)=>`<div style="flex:1;min-width:110px">
+        <div style="font-size:10.5px;color:var(--text3);font-weight:700;letter-spacing:.4px;margin-bottom:4px">${label}</div>
+        <div class="${cls||''}" style="font-size:17px;font-weight:700">${val}</div></div>`;
+      sum.innerHTML=`<div class="chart-card" style="margin-bottom:16px;display:flex;gap:18px;flex-wrap:wrap">
+        ${cell('NET P&L',(st.total>=0?'+':'')+fmtUSD(st.total),st.total>=0?'pnl-pos':'pnl-neg')}
+        ${cell('TRADES',st.n)}
+        ${cell('WIN RATE',st.wr.toFixed(0)+'%')}
+        ${cell('PROFIT FACTOR',st.pf===Infinity?'∞':st.pf.toFixed(2),st.pf>=1?'pnl-pos':'pnl-neg')}
+        ${cell('AVG WIN',fmtUSD(st.avgW),'pnl-pos')}
+        ${cell('AVG LOSS',fmtUSD(st.avgL),'pnl-neg')}
+        ${cell('EXPECTANCY',fmtUSD(st.n?st.total/st.n:0),(st.total>=0?'pnl-pos':'pnl-neg'))}
+      </div>`;
+    }
+  }
 
   // By symbol
   const byS={};
@@ -932,9 +1004,12 @@ function renderReports(){
   // Monthly chart
   killChart('monthly');
   const byM={};
-  EMBEDDED_TRADES.filter(t=>S.broker==='all'||t.broker===S.broker).forEach(t=>{
-    const k=t.date.slice(0,7); byM[k]=(byM[k]||0)+(+t.pnl||0);
-  });
+  EMBEDDED_TRADES
+    .filter(t=>S.broker==='all'||t.broker===S.broker)
+    .filter(t=>S.strategy==='all'||(t.strategy||'unknown')===S.strategy)
+    .forEach(t=>{
+      const k=t.date.slice(0,7); byM[k]=(byM[k]||0)+(+t.pnl||0);
+    });
   const mKeys=Object.keys(byM).sort().slice(-24), mData=mKeys.map(k=>+byM[k].toFixed(2));
   const ctx=document.getElementById('monthlyChart').getContext('2d');
   charts['monthly']=new Chart(ctx,{
