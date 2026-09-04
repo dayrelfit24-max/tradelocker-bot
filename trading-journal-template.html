@@ -759,7 +759,7 @@ function renderTradeTable() {
       const pnlCls = pnl>0 ? 'pnl-pos' : pnl<0 ? 'pnl-neg' : '';
       const pnlStr = (pnl>=0?'+':'')+fmtUSD(pnl);
       return `<tr>
-        <td style="color:var(--text2)">${t.date ? t.date.slice(0,16).replace('T',' ') : '—'}</td>
+        <td style="color:var(--text2)">${t.date ? t.date.slice(0,16).replace('T',' ') : '—'}${t.openDate && t.openDate.slice(0,10) !== t.date.slice(0,10) ? `<div style="font-size:10px;color:var(--text3)">opened ${t.openDate.slice(0,10)}</div>` : ''}</td>
         <td><span class="badge badge-sym">${t.symbol||'—'}</span></td>
         <td><span class="badge ${dirCls}">${t.direction||'—'}</span></td>
         <td style="color:var(--text2)">${fmtPrice(t.entry)}</td>

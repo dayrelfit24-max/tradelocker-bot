@@ -511,6 +511,30 @@ for t in existing:
 if relabeled:
     print(f"  ↻  Relabeled {relabeled} existing trades with correct symbols")
 
+# Drop stale records left behind by earlier runs whose opener/closer pairing was
+# inverted: those have the exit dated before the entry, which is impossible.
+_before = len(existing)
+existing = [
+    t for t in existing
+    if not (t.get("exitTime") and t.get("date") and str(t["exitTime"]) < str(t["date"]))
+]
+if len(existing) != _before:
+    print(f"  ✂  dropped {_before - len(existing)} records with exit before entry")
+
+# A position closed at a given instant is one realized trade; if an older record
+# for that same close survives under a different id, keep only the newest.
+_seen_close, _deduped = {}, []
+for t in existing:
+    key = (t.get("positionId"), str(t.get("exitTime") or ""))
+    if t.get("positionId") and key in _seen_close:
+        continue
+    if t.get("positionId"):
+        _seen_close[key] = True
+    _deduped.append(t)
+if len(_deduped) != len(existing):
+    print(f"  ✂  dropped {len(existing) - len(_deduped)} duplicate close records")
+existing = _deduped
+
 # Deduplicate by trade id (positionId+closerOrderId hash).
 # This allows multiple records per positionId for partial closes.
 # Also updates P&L and symbol on existing records that had wrong values.

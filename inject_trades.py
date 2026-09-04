@@ -45,19 +45,35 @@ tl  = load(TL_JSON,  "TradeLocker")
 tv  = load(TV_JSON,  "Tradovate")
 all_trades = tl + tv
 
-# De-duplicate by id, then by positionId (same position fetched from two sources)
+# De-duplicate by id, then by (positionId, exitTime) — a position can be closed
+# in several partial fills, and each of those is a distinct realized trade, so
+# positionId alone would collapse them into one.
 seen_id, seen_pos, unique = set(), set(), []
 for t in all_trades:
     tid = t.get("id") or t.get("orderId") or str(t)
     pos_id = t.get("positionId")
+    pos_key = (pos_id, str(t.get("exitTime") or ""), t.get("pnl")) if pos_id else None
     if tid in seen_id:
         continue
-    if pos_id and pos_id in seen_pos:
+    if pos_key and pos_key in seen_pos:
         continue
     seen_id.add(tid)
-    if pos_id:
-        seen_pos.add(pos_id)
+    if pos_key:
+        seen_pos.add(pos_key)
     unique.append(t)
+
+# Bucket every stat by CLOSE date so totals match the broker's own reporting.
+# The original open time is preserved as openDate.
+reassigned = 0
+for t in unique:
+    exit_ts = t.get("exitTime")
+    if exit_ts:
+        if t.get("date") and str(exit_ts)[:10] != str(t["date"])[:10]:
+            reassigned += 1
+        t["openDate"] = t.get("date")
+        t["date"] = exit_ts
+if reassigned:
+    print(f"  re-bucketed {reassigned} trades to their close date")
 
 # Sort newest first
 unique.sort(key=lambda t: t.get("date", ""), reverse=True)
