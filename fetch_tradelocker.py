@@ -45,6 +45,31 @@ def _load_journal_rows():
     _journal_rows = rows
     return rows
 
+def build_signal_index(orders):
+    """Map positionId -> the signal row that opened it.
+
+    The bot records the broker's order id when it places a trade, and that id
+    appears verbatim in ordersHistory, so a position can be tied back to the
+    exact signal that produced it. Price/time proximity is only a fallback for
+    trades placed before the bot started recording order ids.
+    """
+    by_order = {}
+    for r in _load_journal_rows():
+        oid = str(r.get("order_id") or "").strip()
+        if oid:
+            by_order[oid] = r
+
+    index = {}
+    for o in orders:
+        oid = str(col(o, "id") or "")
+        row = by_order.get(oid)
+        if row:
+            pos = str(col(o, "positionId") or "")
+            if pos:
+                index[pos] = row
+    return index
+
+
 def load_journal_strategy(symbol, action, entry_price, open_iso=None):
     """Look up strategy from trades_journal.csv by symbol+action, choosing the row
     closest in time to the trade's open (falls back to nearest entry price).
@@ -380,6 +405,9 @@ def stable_id(symbol, direction, entry, exit_px, date_str):
     key = f"{symbol}_{direction}_{entry}_{exit_px}_{str(date_str)[:16]}"
     return "tl_" + hashlib.md5(key.encode()).hexdigest()[:12]
 
+_signal_index = build_signal_index(filled)
+print(f"  {len(_signal_index)} positions linked to a signal by order id")
+
 new_trades = []
 for pos_id, orders in by_position.items():
     # Sort by timestamp
@@ -465,7 +493,17 @@ for pos_id, orders in by_position.items():
                 except: pass
                 break
 
-        new_trades.append({
+        # Exact signal attribution via the order id the bot recorded; fall back
+        # to time/price proximity only for trades placed before that existed.
+        signal = _signal_index.get(str(pos_id))
+        if signal:
+            strategy = signal.get("strategy", "unknown")
+        else:
+            strategy = load_journal_strategy(
+                symbol, "buy" if direction == "Long" else "sell", entry_price, open_ts
+            )
+
+        trade = {
             "id":         trade_id,
             "positionId": pos_id,
             "broker":     "TradeLocker",
@@ -478,9 +516,30 @@ for pos_id, orders in by_position.items():
             "pnl":        pnl,
             "date":       open_ts,
             "exitTime":   close_ts,
-            "strategy":   load_journal_strategy(symbol, "buy" if direction == "Long" else "sell", entry_price, open_ts),
+            "strategy":   strategy,
             "source":     "api",
-        })
+        }
+
+        # Execution quality, recorded only when the signal is known exactly:
+        # what the strategy asked for vs what the broker actually gave us.
+        if signal:
+            try:
+                trade["signalEntry"] = float(signal["entry"])
+                trade["signalSL"]    = float(signal["sl"])
+                trade["signalTP"]    = float(signal["tp"])
+                trade["signalTime"]  = signal.get("timestamp")
+            except Exception:
+                pass
+
+        # Requested vs filled price on the opening order = entry slippage.
+        try:
+            req = float(col(openers[0], "price") or 0)
+            if req:
+                trade["requestedEntry"] = round(req, 5)
+        except Exception:
+            pass
+
+        new_trades.append(trade)
 
 print(f"  {len(new_trades)} round-trip trades built")
 
@@ -558,6 +617,18 @@ for t in new_trades:
             existing[idx]["entry"] = t["entry"]
             existing[idx]["exit"]  = t["exit"]
             existing[idx]["size"]  = t["size"]
+            changed = True
+        # Adopt exact signal attribution and execution-quality fields whenever
+        # this run resolved them; they only ever get more accurate.
+        if t.get("signalEntry") is not None:
+            for k in ("strategy", "signalEntry", "signalSL", "signalTP",
+                      "signalTime", "requestedEntry"):
+                if t.get(k) is not None and existing[idx].get(k) != t[k]:
+                    existing[idx][k] = t[k]
+                    changed = True
+        elif t.get("strategy") not in (None, "unknown") and \
+             existing[idx].get("strategy") in (None, "unknown"):
+            existing[idx]["strategy"] = t["strategy"]
             changed = True
         if changed:
             updated += 1
