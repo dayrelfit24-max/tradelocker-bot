@@ -535,6 +535,7 @@ def run(args):
     if not broker.authenticate():
         sys.exit(1)
 
+    zona = Recorder.ZONA_GRAFICO if args.solo_grafico else None
     rec = Recorder(args.screen, args.fps, args.crf, Path(args.outdir), args.window, zona)
     outdir = Path(args.outdir)
 
