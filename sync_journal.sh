@@ -71,3 +71,6 @@ fi
 "$PYTHON" "$BOT/generate_seasonal_html.py" >> "$LOG" 2>&1
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') === Sync done ===" >> "$LOG"
+
+# Reporte por indicador (solo operaciones con señal verificada)
+python3 "$HOME/tradelocker-bot/reporte_indicadores.py"
