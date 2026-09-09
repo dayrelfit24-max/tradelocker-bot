@@ -189,6 +189,39 @@ def find_window(app_name):
     return None
 
 
+def join_clips(stem, parts, outdir):
+    """Une el clip de apertura y el de cierre en un solo MP4.
+
+    Si alguno falta o la unión falla se devuelve None y el llamador se queda
+    con las piezas sueltas — es preferible a perder la grabación.
+    """
+    parts = [p for p in parts if p and Path(p).exists()]
+    if len(parts) < 2:
+        return parts[0] if parts else None
+    lst = outdir / f".{stem}_lista.txt"
+    final = outdir / f"{stem}.mp4"
+    try:
+        lst.write_text("".join(f"file '{Path(p).resolve()}'\n" for p in parts))
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-f", "concat", "-safe", "0", "-i", str(lst),
+             "-c", "copy", str(final)],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            log.warning("no se pudieron unir los clips: %s", r.stderr[:160])
+            return None
+        for p in parts:
+            Path(p).unlink(missing_ok=True)
+        log.info("■ %s (%.1f MB, apertura + cierre)",
+                 final.name, final.stat().st_size / 1e6)
+        return final
+    except Exception as e:
+        log.warning("falló la unión: %s", e)
+        return None
+    finally:
+        lst.unlink(missing_ok=True)
+
+
 def window_title(app_name):
     """Título de la ventana de una app, o '' si no está."""
     try:
@@ -330,12 +363,29 @@ class Recorder:
     def minutes(self):
         return (time.time() - self.started) / 60 if self.started else 0
 
-    def stop(self):
+    def stop_process(self):
         """Cierra ffmpeg con SIGINT para que escriba el índice del MP4.
 
         Matarlo de golpe deja el archivo sin el 'moov atom' y no se puede
         reproducir, así que hay que darle tiempo a terminar.
         """
+        if not self.proc:
+            return
+        try:
+            self.proc.send_signal(signal.SIGINT)
+        except Exception:
+            pass
+        try:
+            self.proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
+
+    def stop(self):
         if not self.proc:
             return None
         try:
@@ -465,7 +515,21 @@ def run(args):
         if current and current["id"] not in positions:
             log.info("posición %s cerrada", current["id"][-8:])
             time.sleep(SETTLE_SECS)    # dejar ver la vela final
-            path = rec.stop()
+            path = rec.stop() if rec.active else None
+
+            if args.clips:
+                # El gráfico recién cerrado todavía muestra la entrada, el SL y
+                # el TP dibujados por el indicador, así que grabar unos minutos
+                # DESPUÉS del cierre captura el trade completo y resuelto —
+                # sin tener que dejar la cámara corriendo tres días.
+                if args.auto_symbol and args.window:
+                    switch_symbol(current["symbol"], args.window)
+                if rec.start(current["stem"] + "_cierre"):
+                    time.sleep(args.exit_minutes * 60)
+                    tail = rec.stop()
+                    if tail:
+                        path = join_clips(current["stem"], [path, tail],
+                                          Path(args.outdir)) or tail
             if path:
                 label, pnl = outcome_for(current["id"])
                 if label:
@@ -482,7 +546,13 @@ def run(args):
             current = None
 
         # partir grabaciones largas para que los archivos no crezcan sin control
-        elif current and rec.active and rec.minutes >= args.max_minutes:
+        elif current and args.clips and rec.active and \
+                rec.minutes >= args.entry_minutes:
+            log.info("clip de entrada listo; espero el cierre del trade")
+            rec.stop()
+
+        elif current and not args.clips and rec.active and \
+                rec.minutes >= args.max_minutes:
             log.info("tramo de %d min completo, sigo en otro archivo", args.max_minutes)
             rec.stop()
             current["part"] += 1
@@ -506,7 +576,8 @@ def run(args):
                 if args.auto_symbol and args.window:
                     switch_symbol(sym, args.window)
                 if rec.start(stem):
-                    current = {"id": pid, "stem": stem, "part": 1}
+                    current = {"id": pid, "stem": stem, "part": 1,
+                               "symbol": sym}
                 else:
                     log.error("no se pudo grabar este trade; sigo esperando")
                     known = dict(positions)
@@ -535,6 +606,12 @@ def main():
                    help="no cambiar el símbolo del gráfico al abrirse un trade")
     p.add_argument("--symbol-test", metavar="SIMBOLO",
                    help="probar el cambio de símbolo (ej: --symbol-test NAS100)")
+    p.add_argument("--full", dest="clips", action="store_false",
+                   help="grabar el trade entero en vez de arranque + cierre")
+    p.add_argument("--entry-minutes", type=float, default=3,
+                   help="minutos a grabar desde que abre el trade")
+    p.add_argument("--exit-minutes", type=float, default=2,
+                   help="minutos a grabar cuando el trade cierra")
     p.add_argument("--list-screens", action="store_true")
     p.add_argument("--test", type=int, metavar="SEGS",
                    help="graba N segundos ya, para probar permisos y pantalla")
