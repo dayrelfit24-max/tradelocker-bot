@@ -1,5 +1,307 @@
 [
   {
+    "id": "tl_5f691032f2cd",
+    "positionId": "72057594047238932",
+    "broker": "TradeLocker",
+    "symbol": "NAS100",
+    "direction": "Long",
+    "entry": 29564.28,
+    "exit": 29458.93,
+    "size": 0.1,
+    "pnl": -10.53,
+    "date": "2026-09-09T01:30:12.261000+00:00",
+    "exitTime": "2026-09-09T01:30:12.897000+00:00",
+    "strategy": "ema50_vwap",
+    "source": "api-poll"
+  },
+  {
+    "id": "tl_8a1cb8f9914d",
+    "positionId": "72057594047238932",
+    "broker": "TradeLocker",
+    "symbol": "NAS100",
+    "direction": "Long",
+    "entry": 29564.28,
+    "exit": 29458.93,
+    "sl": 29460.5,
+    "size": 0.1,
+    "pnl": -10.53,
+    "date": "2026-09-09T01:30:12.261000+00:00",
+    "exitTime": "2026-09-09T01:30:12.897000+00:00",
+    "strategy": "ema50_vwap",
+    "source": "api",
+    "signalEntry": 29564.55,
+    "signalSL": 29460.5,
+    "signalTP": 29876.7,
+    "signalTime": "2026-09-09 01:30:12",
+    "requestedEntry": 29562.98
+  },
+  {
+    "id": "tl_995b1c4cf7ea",
+    "positionId": "72057594047187166",
+    "broker": "TradeLocker",
+    "symbol": "INSTR_3470",
+    "direction": "Long",
+    "entry": 1.16223,
+    "exit": 1.16233,
+    "size": 1.0,
+    "pnl": 0.0,
+    "date": "2026-09-08T13:30:42.945000+00:00",
+    "exitTime": "2026-09-08T13:33:24.868000+00:00",
+    "strategy": "unknown",
+    "source": "api-poll"
+  },
+  {
+    "id": "tl_6debd287116f",
+    "positionId": "72057594047187166",
+    "broker": "TradeLocker",
+    "symbol": "EURUSD",
+    "direction": "Long",
+    "entry": 1.16223,
+    "exit": 1.16233,
+    "sl": 1.1608,
+    "size": 1.0,
+    "pnl": 10.0,
+    "date": "2026-09-08T13:30:42.945000+00:00",
+    "exitTime": "2026-09-08T13:33:24.868000+00:00",
+    "strategy": "ema50_vwap",
+    "source": "api",
+    "signalEntry": 1.16226,
+    "signalSL": 1.1608,
+    "signalTP": 1.17,
+    "signalTime": "2026-09-08 13:30:43",
+    "requestedEntry": 1.16219
+  },
+  {
+    "id": "tl_8c3bc29c14cf",
+    "positionId": "72057594047176971",
+    "broker": "TradeLocker",
+    "symbol": "NAS100",
+    "direction": "Short",
+    "entry": 29522.36,
+    "exit": 29622.94,
+    "size": 0.17,
+    "pnl": -17.1,
+    "date": "2026-09-08T11:21:38.534000+00:00",
+    "exitTime": "2026-09-08T13:12:10.278000+00:00",
+    "strategy": "unknown",
+    "source": "api-poll"
+  },
+  {
+    "id": "tl_2bb25595c967",
+    "positionId": "72057594047176971",
+    "broker": "TradeLocker",
+    "symbol": "NAS100",
+    "direction": "Short",
+    "entry": 29522.36,
+    "exit": 29622.94,
+    "sl": null,
+    "size": 0.17,
+    "pnl": -17.1,
+    "date": "2026-09-08T11:21:38.534000+00:00",
+    "exitTime": "2026-09-08T13:12:10.278000+00:00",
+    "strategy": "ema50_vwap",
+    "source": "api",
+    "requestedEntry": 29522.61
+  },
+  {
+    "id": "tl_ca2a49b3b31b",
+    "positionId": "72057594047144283",
+    "broker": "TradeLocker",
+    "symbol": "NAS100",
+    "direction": "Long",
+    "entry": 29589.83,
+    "exit": 29488.49,
+    "size": 0.17,
+    "pnl": -17.23,
+    "date": "2026-09-08T00:30:14.989000+00:00",
+    "exitTime": "2026-09-08T00:30:15.501000+00:00",
+    "strategy": "unknown",
+    "source": "api-poll"
+  },
+  {
+    "id": "tl_bcd0a464663b",
+    "positionId": "72057594047144283",
+    "broker": "TradeLocker",
+    "symbol": "NAS100",
+    "direction": "Long",
+    "entry": 29589.83,
+    "exit": 29488.49,
+    "sl": 29488.25,
+    "size": 0.17,
+    "pnl": -17.23,
+    "date": "2026-09-08T00:30:14.989000+00:00",
+    "exitTime": "2026-09-08T00:30:15.501000+00:00",
+    "strategy": "dual_vwap",
+    "source": "api",
+    "signalEntry": 29591.25,
+    "signalSL": 29488.25,
+    "signalTP": 29900.25,
+    "signalTime": "2026-09-08 00:30:15",
+    "requestedEntry": 29588.98
+  },
+  {
+    "id": "tl_efe51cca2250",
+    "positionId": "72057594047112763",
+    "broker": "TradeLocker",
+    "symbol": "US30",
+    "direction": "Short",
+    "entry": 53204.75,
+    "exit": 53240.85,
+    "size": 0.05,
+    "pnl": -1.8,
+    "date": "2026-09-07T10:08:04.505000+00:00",
+    "exitTime": "2026-09-07T10:08:04.867000+00:00",
+    "strategy": "dual_vwap",
+    "source": "api-poll"
+  },
+  {
+    "id": "tl_69347195bb2d",
+    "positionId": "72057594047112763",
+    "broker": "TradeLocker",
+    "symbol": "US30",
+    "direction": "Short",
+    "entry": 53204.75,
+    "exit": 53240.85,
+    "sl": 53235.6,
+    "size": 0.05,
+    "pnl": -1.8,
+    "date": "2026-09-07T10:08:04.505000+00:00",
+    "exitTime": "2026-09-07T10:08:04.867000+00:00",
+    "strategy": "dual_vwap",
+    "source": "api",
+    "signalEntry": 53215.1,
+    "signalSL": 53235.6,
+    "signalTP": 53153.6,
+    "signalTime": "2026-09-07 10:08:04",
+    "requestedEntry": 53204.8
+  },
+  {
+    "id": "tl_e742659f65b0",
+    "positionId": "72057594047112022",
+    "broker": "TradeLocker",
+    "symbol": "US30",
+    "direction": "Short",
+    "entry": 53198.74,
+    "exit": 53240.86,
+    "sl": 53237.1,
+    "size": 0.12,
+    "pnl": -5.05,
+    "date": "2026-09-07T09:30:10.217000+00:00",
+    "exitTime": "2026-09-07T09:30:10.858000+00:00",
+    "strategy": "dual_vwap",
+    "source": "api",
+    "signalEntry": 53205.1,
+    "signalSL": 53237.1,
+    "signalTP": 53109.1,
+    "signalTime": "2026-09-07 09:30:10",
+    "requestedEntry": 53198.8
+  },
+  {
+    "id": "tl_2144ddc4838d",
+    "positionId": "72057594047109594",
+    "broker": "TradeLocker",
+    "symbol": "US30",
+    "direction": "Short",
+    "entry": 53205.16,
+    "exit": 53240.87,
+    "sl": 53237.1,
+    "size": 0.53,
+    "pnl": -18.93,
+    "date": "2026-09-07T08:16:05.660000+00:00",
+    "exitTime": "2026-09-07T08:16:06.395000+00:00",
+    "strategy": "dual_vwap",
+    "source": "api",
+    "signalEntry": 53208.6,
+    "signalSL": 53237.1,
+    "signalTP": 53123.1,
+    "signalTime": "2026-09-07 08:16:05",
+    "requestedEntry": 53205.3
+  },
+  {
+    "id": "tl_ec2b7d0069f8",
+    "positionId": "72057594047109231",
+    "broker": "TradeLocker",
+    "symbol": "US30",
+    "direction": "Long",
+    "entry": 53212.15,
+    "exit": 53127.85,
+    "sl": 53128.6,
+    "size": 0.2,
+    "pnl": -16.86,
+    "date": "2026-09-07T08:09:08.025000+00:00",
+    "exitTime": "2026-09-07T08:09:08.420000+00:00",
+    "strategy": "ema50_vwap",
+    "source": "api",
+    "signalEntry": 53225.1,
+    "signalSL": 53128.6,
+    "signalTP": 53514.6,
+    "signalTime": "2026-09-07 08:09:08",
+    "requestedEntry": 53212.05
+  },
+  {
+    "id": "tl_95ad08575906",
+    "positionId": "72057594047081977",
+    "broker": "TradeLocker",
+    "symbol": "US30",
+    "direction": "Short",
+    "entry": 53255.9,
+    "exit": 52613.12,
+    "sl": 53759.2,
+    "size": 0.02,
+    "pnl": 12.86,
+    "date": "2026-09-07T00:30:15.777000+00:00",
+    "exitTime": "2026-09-07T00:30:16.379000+00:00",
+    "strategy": "dual_vwap",
+    "source": "api",
+    "signalEntry": 53266.9,
+    "signalSL": 53759.2,
+    "signalTP": 51790.0,
+    "signalTime": "2026-09-07 00:30:15",
+    "requestedEntry": 53256.17
+  },
+  {
+    "id": "tl_78edb6ea4267",
+    "positionId": "72057594047081957",
+    "broker": "TradeLocker",
+    "symbol": "NAS100",
+    "direction": "Long",
+    "entry": 29532.92,
+    "exit": 29502.76,
+    "sl": 29505.0,
+    "size": 0.94,
+    "pnl": -28.35,
+    "date": "2026-09-07T00:30:07.891000+00:00",
+    "exitTime": "2026-09-07T00:30:08.502000+00:00",
+    "strategy": "dual_vwap",
+    "source": "api",
+    "signalEntry": 29527.3,
+    "signalSL": 29505.0,
+    "signalTP": 29594.2,
+    "signalTime": "2026-09-07 00:30:07",
+    "requestedEntry": 29532.56
+  },
+  {
+    "id": "tl_53d9cba55db0",
+    "positionId": "72057594047081748",
+    "broker": "TradeLocker",
+    "symbol": "US30",
+    "direction": "Short",
+    "entry": 53258.24,
+    "exit": 52743.84,
+    "sl": 53759.2,
+    "size": 0.04,
+    "pnl": 20.58,
+    "date": "2026-09-07T00:27:10.733000+00:00",
+    "exitTime": "2026-09-08T14:34:59.504000+00:00",
+    "strategy": "dual_vwap",
+    "source": "api",
+    "signalEntry": 53268.9,
+    "signalSL": 53759.2,
+    "signalTP": 51798.0,
+    "signalTime": "2026-09-07 00:27:10",
+    "requestedEntry": 53258.61
+  },
+  {
     "id": "tl_9655d9d7fb0c",
     "positionId": "72057594047042640",
     "broker": "TradeLocker",
@@ -701,7 +1003,7 @@
     "pnl": -14.6,
     "date": "2026-08-19T13:25:32.980000+00:00",
     "exitTime": "2026-08-20T11:22:53.370000+00:00",
-    "strategy": "unknown",
+    "strategy": "dual_vwap",
     "source": "api"
   },
   {
@@ -2797,7 +3099,7 @@
     "pnl": -12.39,
     "date": "2026-06-24T15:00:09.212000+00:00",
     "exitTime": "2026-06-24T16:52:37.887000+00:00",
-    "strategy": "unknown",
+    "strategy": "dual_vwap",
     "source": "api"
   },
   {
@@ -2829,7 +3131,7 @@
     "pnl": -3.57,
     "date": "2026-06-24T12:00:11.200000+00:00",
     "exitTime": "2026-06-24T12:42:10.115000+00:00",
-    "strategy": "unknown",
+    "strategy": "dual_vwap",
     "source": "api"
   },
   {
@@ -6029,7 +6331,7 @@
     "pnl": -0.2,
     "date": "2026-05-14T19:16:17.661000+00:00",
     "exitTime": "2026-05-14T20:15:55.841000+00:00",
-    "strategy": "unknown",
+    "strategy": "dual_vwap",
     "source": "api"
   },
   {
@@ -6045,7 +6347,7 @@
     "pnl": 2.25,
     "date": "2026-05-14T17:16:59.161000+00:00",
     "exitTime": "2026-05-14T17:18:28.767000+00:00",
-    "strategy": "unknown",
+    "strategy": "dual_vwap",
     "source": "api"
   },
   {
@@ -6557,7 +6859,7 @@
     "pnl": -20.6,
     "date": "2026-05-01T12:14:04.975000+00:00",
     "exitTime": "2026-05-01T12:15:54.912000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -6605,7 +6907,7 @@
     "pnl": 12.46,
     "date": "2026-04-30T15:01:25.207000+00:00",
     "exitTime": "2026-04-30T18:53:27.939000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -6845,7 +7147,7 @@
     "pnl": 18.6,
     "date": "2026-04-24T18:42:44.330000+00:00",
     "exitTime": "2026-04-27T03:11:03.168000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -6861,7 +7163,7 @@
     "pnl": 28.9,
     "date": "2026-04-24T18:42:12.797000+00:00",
     "exitTime": "2026-04-24T18:42:35.568000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -6877,7 +7179,7 @@
     "pnl": 24.0,
     "date": "2026-04-24T13:00:14.077000+00:00",
     "exitTime": "2026-04-24T17:31:32.314000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -7085,7 +7387,7 @@
     "pnl": -308.5,
     "date": "2026-04-20T21:20:15.471000+00:00",
     "exitTime": "2026-04-20T21:20:16.101000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -7389,7 +7691,7 @@
     "pnl": -5.9,
     "date": "2026-04-15T01:11:58.638000+00:00",
     "exitTime": "2026-04-15T01:42:25.240000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -7485,7 +7787,7 @@
     "pnl": 36.4,
     "date": "2026-04-13T22:59:56.432000+00:00",
     "exitTime": "2026-04-13T23:01:09.590000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -7805,7 +8107,7 @@
     "pnl": 6.6,
     "date": "2026-04-10T17:10:50.052000+00:00",
     "exitTime": "2026-04-10T19:08:59.582000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -7821,7 +8123,7 @@
     "pnl": 21.24,
     "date": "2026-04-10T17:00:55.802000+00:00",
     "exitTime": "2026-04-13T17:29:59.998000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -7837,7 +8139,7 @@
     "pnl": 4.4,
     "date": "2026-04-10T17:00:55.802000+00:00",
     "exitTime": "2026-04-13T19:11:57.370000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -7869,7 +8171,7 @@
     "pnl": 19.1,
     "date": "2026-04-10T11:35:19.450000+00:00",
     "exitTime": "2026-04-10T13:32:37.622000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -7949,7 +8251,7 @@
     "pnl": 19.86,
     "date": "2026-04-09T12:38:24.413000+00:00",
     "exitTime": "2026-04-09T17:30:38.047000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -8029,7 +8331,7 @@
     "pnl": 24.72,
     "date": "2026-04-08T00:15:53.075000+00:00",
     "exitTime": "2026-04-08T12:47:22.773000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -8269,7 +8571,7 @@
     "pnl": 2.24,
     "date": "2026-04-07T06:30:00.180000+00:00",
     "exitTime": "2026-04-07T06:30:00.831000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -8285,7 +8587,7 @@
     "pnl": 2.78,
     "date": "2026-04-07T05:00:00.233000+00:00",
     "exitTime": "2026-04-07T05:00:00.870000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -8429,7 +8731,7 @@
     "pnl": -4.68,
     "date": "2026-04-06T14:30:00.196000+00:00",
     "exitTime": "2026-04-06T14:30:00.740000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -8461,7 +8763,7 @@
     "pnl": -4.22,
     "date": "2026-04-06T14:00:00.268000+00:00",
     "exitTime": "2026-04-06T14:00:00.766000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -8477,7 +8779,7 @@
     "pnl": 19.1,
     "date": "2026-04-06T13:49:17.037000+00:00",
     "exitTime": "2026-04-07T18:49:36.420000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -9021,7 +9323,7 @@
     "pnl": 13.6,
     "date": "2026-03-31T13:42:55.727000+00:00",
     "exitTime": "2026-03-31T14:01:25.360000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -11181,7 +11483,7 @@
     "pnl": -8.96,
     "date": "2026-03-13T14:31:09.195000+00:00",
     "exitTime": "2026-03-13T14:36:28.158000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -11629,7 +11931,7 @@
     "pnl": 8.2,
     "date": "2026-03-10T13:31:02.079000+00:00",
     "exitTime": "2026-03-10T17:29:13.427000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -11821,7 +12123,7 @@
     "pnl": -13.9,
     "date": "2026-03-06T12:42:05.058000+00:00",
     "exitTime": "2026-03-06T12:59:19.655000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -11853,7 +12155,7 @@
     "pnl": -50.19,
     "date": "2026-03-06T00:30:51.476000+00:00",
     "exitTime": "2026-03-08T22:05:09.310000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -11869,7 +12171,7 @@
     "pnl": 1.8,
     "date": "2026-03-06T00:30:51.476000+00:00",
     "exitTime": "2026-03-10T02:09:41.465000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -11997,7 +12299,7 @@
     "pnl": -86.7,
     "date": "2026-03-05T02:49:13.337000+00:00",
     "exitTime": "2026-03-08T22:05:09.309000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12109,7 +12411,7 @@
     "pnl": -7.4,
     "date": "2026-03-04T14:11:21.354000+00:00",
     "exitTime": "2026-03-05T01:25:59.400000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12125,7 +12427,7 @@
     "pnl": 14.6,
     "date": "2026-03-03T15:26:18.471000+00:00",
     "exitTime": "2026-03-03T15:34:19.152000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12157,7 +12459,7 @@
     "pnl": -1.2,
     "date": "2026-03-03T13:51:00.681000+00:00",
     "exitTime": "2026-03-03T19:46:50.125000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12205,7 +12507,7 @@
     "pnl": 1.1,
     "date": "2026-03-02T23:07:08.408000+00:00",
     "exitTime": "2026-03-03T02:05:52.926000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12237,7 +12539,7 @@
     "pnl": 20.7,
     "date": "2026-03-02T16:40:28.910000+00:00",
     "exitTime": "2026-03-02T17:24:22.763000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12253,7 +12555,7 @@
     "pnl": 4.95,
     "date": "2026-03-02T14:31:12.986000+00:00",
     "exitTime": "2026-03-02T15:06:09.049000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12509,7 +12811,7 @@
     "pnl": 9.0,
     "date": "2026-02-26T16:24:13.157000+00:00",
     "exitTime": "2026-02-26T20:14:22.232000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12605,7 +12907,7 @@
     "pnl": 5.4,
     "date": "2026-02-26T13:00:45.421000+00:00",
     "exitTime": "2026-02-27T21:09:00.458000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12621,7 +12923,7 @@
     "pnl": -2.0,
     "date": "2026-02-25T17:17:38.174000+00:00",
     "exitTime": "2026-02-27T21:09:13.247000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -12637,7 +12939,7 @@
     "pnl": 11.2,
     "date": "2026-02-25T15:07:45.901000+00:00",
     "exitTime": "2026-02-25T15:15:30.684000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -13133,7 +13435,7 @@
     "pnl": 14.8,
     "date": "2026-02-23T13:33:36.273000+00:00",
     "exitTime": "2026-02-23T15:21:50.162000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -13789,7 +14091,7 @@
     "pnl": -14.6,
     "date": "2026-02-20T01:00:00.153000+00:00",
     "exitTime": "2026-02-20T01:00:00.721000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -13821,7 +14123,7 @@
     "pnl": -45.6,
     "date": "2026-02-19T22:00:00.174000+00:00",
     "exitTime": "2026-02-19T22:00:00.726000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -14109,7 +14411,7 @@
     "pnl": -5.4,
     "date": "2026-02-18T19:13:00.223000+00:00",
     "exitTime": "2026-02-18T19:13:00.935000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -14125,7 +14427,7 @@
     "pnl": -5.55,
     "date": "2026-02-18T18:00:16.954000+00:00",
     "exitTime": "2026-02-18T18:00:41.647000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -15421,7 +15723,7 @@
     "pnl": -22.8,
     "date": "2026-02-13T13:57:02.508000+00:00",
     "exitTime": "2026-02-13T15:32:32.013000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -32653,7 +32955,7 @@
     "pnl": 53.82,
     "date": "2025-10-10T02:01:28.926000+00:00",
     "exitTime": "2025-10-10T15:11:54.178000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -32669,7 +32971,7 @@
     "pnl": 4.61,
     "date": "2025-10-10T02:01:28.926000+00:00",
     "exitTime": "2025-10-10T15:47:27.277000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -32765,7 +33067,7 @@
     "pnl": 6.75,
     "date": "2025-10-09T19:01:06.517000+00:00",
     "exitTime": "2025-10-10T01:59:42.509000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
@@ -32781,7 +33083,7 @@
     "pnl": 6.7,
     "date": "2025-10-09T19:01:05.294000+00:00",
     "exitTime": "2025-10-10T01:59:31.753000+00:00",
-    "strategy": "unknown",
+    "strategy": "ema50_vwap",
     "source": "api"
   },
   {
