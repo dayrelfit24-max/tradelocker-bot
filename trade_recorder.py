@@ -327,7 +327,14 @@ def switch_symbol(symbol, app="TradingView", timeout=12):
 class Recorder:
     """Envuelve ffmpeg. Un archivo por tramo; los trades largos se parten."""
 
-    def __init__(self, screen, fps, crf, outdir, window=None):
+    # Zona del gráfico central dentro de la ventana de TradingView, medida
+    # sobre una captura real: deja fuera el panel lateral, la lista de
+    # instrumentos y el gráfico chico de la izquierda, y llega hasta el borde
+    # del eje de precios.
+    ZONA_GRAFICO = (0.2052, 0.0747, 0.6458, 0.8238)
+
+    def __init__(self, screen, fps, crf, outdir, window=None, zona=None):
+        self.zona = zona
         self.screen = screen
         self.fps = fps
         self.crf = crf
@@ -347,8 +354,20 @@ class Recorder:
             if found:
                 idx, x, y, w, h = found
                 screen = str(idx)
-                crop = f"crop={w - w % 2}:{h - h % 2}:{x}:{y}"
-                log.info("ventana de %s: %dx%d en pantalla %d", self.window, w, h, idx)
+                if self.zona:
+                    # Recorte al gráfico central, en fracciones del ancho y alto
+                    # de la ventana para que aguante si se cambia de tamaño.
+                    fx, fy, fw, fh = self.zona
+                    zx, zy = x + int(w * fx), y + int(h * fy)
+                    zw, zh = int(w * fw), int(h * fh)
+                    zw, zh = zw - zw % 2, zh - zh % 2
+                    crop = f"crop={zw}:{zh}:{zx}:{zy}"
+                    log.info("ventana de %s en pantalla %d → recorte al gráfico %dx%d",
+                             self.window, idx, zw, zh)
+                else:
+                    crop = f"crop={w - w % 2}:{h - h % 2}:{x}:{y}"
+                    log.info("ventana de %s: %dx%d en pantalla %d",
+                             self.window, w, h, idx)
             else:
                 log.warning("no encontré la ventana de %s; grabo la pantalla %s",
                             self.window, screen)
@@ -516,7 +535,7 @@ def run(args):
     if not broker.authenticate():
         sys.exit(1)
 
-    rec = Recorder(args.screen, args.fps, args.crf, Path(args.outdir), args.window)
+    rec = Recorder(args.screen, args.fps, args.crf, Path(args.outdir), args.window, zona)
     outdir = Path(args.outdir)
 
     # Los dos indicadores operan a la vez, así que casi siempre hay más de una
@@ -677,6 +696,8 @@ def main():
                    help="minutos a grabar cuando el trade cierra")
     p.add_argument("--entry-grace", type=float, default=120,
                    help="segundos tras abrir un trade en que aún vale su clip de apertura")
+    p.add_argument("--ventana-completa", dest="solo_grafico", action="store_false",
+                   help="grabar toda la ventana en vez de solo el gráfico central")
     p.add_argument("--list-screens", action="store_true")
     p.add_argument("--test", type=int, metavar="SEGS",
                    help="graba N segundos ya, para probar permisos y pantalla")
@@ -693,6 +714,8 @@ def main():
         handlers=handlers,
     )
 
+    zona = Recorder.ZONA_GRAFICO if args.solo_grafico else None
+
     if args.list_screens:
         list_screens()
         return
@@ -704,7 +727,7 @@ def main():
         return
 
     if args.test:
-        rec = Recorder(args.screen, args.fps, args.crf, Path(args.outdir), args.window)
+        rec = Recorder(args.screen, args.fps, args.crf, Path(args.outdir), args.window, zona)
         log.info("prueba de %ds…", args.test)
         if not rec.start(f"prueba_{datetime.now():%H%M%S}"):
             sys.exit(1)
