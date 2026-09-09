@@ -487,9 +487,15 @@ def run(args):
         sys.exit(1)
 
     rec = Recorder(args.screen, args.fps, args.crf, Path(args.outdir), args.window)
-    # posición que se está grabando: {id, symbol, side, strategy, part}
-    current = None
-    known = broker.open_positions() or {}
+    outdir = Path(args.outdir)
+
+    # Los dos indicadores operan a la vez, así que casi siempre hay más de una
+    # posición abierta. Se siguen todas; la cámara es una sola y se reparte.
+    tracked = {}        # pid -> datos del trade
+    closing = []        # cierres pendientes de grabar
+    recording = None    # pid cuyo clip de apertura se está grabando
+
+    known = set((broker.open_positions() or {}).keys())
     if known:
         log.info("ya hay %d posición(es) abierta(s); se ignoran hasta que cierren",
                  len(known))
@@ -504,92 +510,119 @@ def run(args):
     signal.signal(signal.SIGINT, bye)
     signal.signal(signal.SIGTERM, bye)
 
+    def name_final(path, pid, stem):
+        label, pnl = outcome_for(pid)
+        if label:
+            money = f"{'+' if (pnl or 0) >= 0 else ''}{pnl:.2f}"
+            final = path.with_name(f"{stem}_{label}_{money}.mp4")
+        else:
+            final = path.with_name(f"{stem}_cerrado.mp4")
+            log.warning("no apareció el resultado a tiempo; sin P&L en el nombre")
+        try:
+            path.rename(final)
+            log.info("→ %s", final.name)
+        except Exception as e:
+            log.warning("no se pudo renombrar: %s", e)
+
     while not stopping:
         positions = broker.open_positions()
-
         if positions is None:          # error de red: no cortar la grabación
             time.sleep(POLL_SECONDS)
             continue
 
-        # ¿se cerró la que estábamos grabando?
-        if current and current["id"] not in positions:
-            log.info("posición %s cerrada", current["id"][-8:])
-            time.sleep(SETTLE_SECS)    # dejar ver la vela final
-            path = rec.stop() if rec.active else None
+        # ── posiciones nuevas: se registran TODAS, aunque la cámara esté ocupada
+        for pid, info in positions.items():
+            if pid in known or pid in tracked:
+                continue
+            sym, side = info["symbol"], info["side"]
+            direction = "Long" if side.lower() == "buy" else "Short"
+            strat = strategy_for(sym, side)
+            stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            tracked[pid] = {
+                "symbol": sym, "direction": direction, "strategy": strat,
+                "stem": f"{stamp}_{safe(sym)}_{direction}_{safe(strat)}",
+                "opened": time.time(), "entry_clip": None,
+            }
+            log.info("▶ trade nuevo: %s %s @ %s (%s)",
+                     sym, direction, info["entry"], strat)
 
+        # ── cierres: a la cola, para no perder ninguno mientras se graba otro
+        for pid in [p for p in tracked if p not in positions]:
+            if pid not in closing:
+                closing.append(pid)
+                log.info("posición %s cerrada (%s)", pid[-8:], tracked[pid]["symbol"])
+
+        # ── cortar el clip de apertura cuando cumple su tiempo
+        if recording and rec.active and rec.minutes >= args.entry_minutes:
+            tracked[recording]["entry_clip"] = rec.stop()
+            log.info("clip de apertura listo (%s)", tracked[recording]["symbol"])
+            recording = None
+
+        # ── atender un cierre: es lo más valioso, tiene prioridad sobre todo
+        if closing:
+            pid = closing[0]
+            info = tracked.get(pid, {})
+            if recording:              # soltar la cámara
+                tracked[recording]["entry_clip"] = rec.stop()
+                recording = None
+            elif rec.active:
+                rec.stop()
+
+            time.sleep(SETTLE_SECS)    # dejar ver la vela final
+            path = info.get("entry_clip")
             if args.clips:
-                # El gráfico recién cerrado todavía muestra la entrada, el SL y
-                # el TP dibujados por el indicador, así que grabar unos minutos
-                # DESPUÉS del cierre captura el trade completo y resuelto —
-                # sin tener que dejar la cámara corriendo tres días.
-                if args.auto_symbol and args.window:
-                    switch_symbol(current["symbol"], args.window)
-                if rec.start(current["stem"] + "_cierre"):
+                # El indicador deja dibujados entrada, SL y TP durante 40 velas,
+                # así que grabar DESPUÉS del cierre muestra el trade resuelto.
+                if args.auto_symbol and args.window and info.get("symbol"):
+                    switch_symbol(info["symbol"], args.window)
+                if rec.start(info.get("stem", "cierre") + "_cierre"):
                     time.sleep(args.exit_minutes * 60)
                     tail = rec.stop()
                     if tail:
-                        path = join_clips(current["stem"], [path, tail],
-                                          Path(args.outdir)) or tail
+                        path = (join_clips(info["stem"], [path, tail], outdir)
+                                if path else tail)
+                elif path:
+                    # sin clip de cierre, la apertura queda como el video final
+                    dest = outdir / f"{info['stem']}.mp4"
+                    try:
+                        path = path.rename(dest) or dest
+                    except Exception:
+                        pass
             if path:
-                label, pnl = outcome_for(current["id"])
-                if label:
-                    money = f"{'+' if (pnl or 0) >= 0 else ''}{pnl:.2f}"
-                    final = path.with_name(f"{path.stem}_{label}_{money}.mp4")
-                else:
-                    final = path.with_name(f"{path.stem}_cerrado.mp4")
-                    log.warning("no apareció el resultado a tiempo; sin P&L en el nombre")
-                try:
-                    path.rename(final)
-                    log.info("→ %s", final.name)
-                except Exception as e:
-                    log.warning("no se pudo renombrar: %s", e)
-            current = None
+                name_final(path, pid, info.get("stem", "trade"))
+            closing.pop(0)
+            tracked.pop(pid, None)
+            known = set(positions.keys())
+            time.sleep(POLL_SECONDS)
+            continue
 
-        # partir grabaciones largas para que los archivos no crezcan sin control
-        elif current and args.clips and rec.active and \
-                rec.minutes >= args.entry_minutes:
-            log.info("clip de entrada listo; espero el cierre del trade")
-            rec.stop()
-
-        elif current and not args.clips and rec.active and \
-                rec.minutes >= args.max_minutes:
-            log.info("tramo de %d min completo, sigo en otro archivo", args.max_minutes)
-            rec.stop()
-            current["part"] += 1
-            rec.start(f"{current['stem']}_parte{current['part']}")
-
-        # ¿se abrió una nueva?
-        if not current:
-            fresh = [p for p in positions if p not in known]
-            if fresh:
-                pid = fresh[0]
-                info = positions[pid]
-                sym, side = info["symbol"], info["side"]
-                strat = strategy_for(sym, side)
-                direction = "Long" if side.lower() == "buy" else "Short"
-                stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-                stem = f"{stamp}_{safe(sym)}_{direction}_{safe(strat)}"
-                log.info("▶ trade nuevo: %s %s @ %s (%s)",
-                         sym, direction, info["entry"], strat)
-                # Poner el gráfico en el símbolo operado ANTES de grabar, para
-                # que el video no muestre otro par.
+        # ── si la cámara está libre, grabar la apertura de un trade reciente
+        if not recording and not rec.active:
+            for pid, info in tracked.items():
+                if info["entry_clip"] is not None:
+                    continue
+                if time.time() - info["opened"] > args.entry_grace:
+                    # Se abrió mientras la cámara estaba ocupada; ya pasó el
+                    # momento de la entrada. Igual se grabará su cierre.
+                    if not info.get("skipped"):
+                        info["skipped"] = True
+                        log.info("sin clip de apertura para %s (cámara ocupada); "
+                                 "se grabará el cierre", info["symbol"])
+                    continue
                 if args.auto_symbol and args.window:
-                    switch_symbol(sym, args.window)
-                if rec.start(stem):
-                    current = {"id": pid, "stem": stem, "part": 1,
-                               "symbol": sym}
-                else:
-                    log.error("no se pudo grabar este trade; sigo esperando")
-                    known = dict(positions)
+                    switch_symbol(info["symbol"], args.window)
+                if rec.start(info["stem"] + "_apertura"):
+                    recording = pid
+                break
 
-        known = dict(positions)
+        known = set(positions.keys())
         time.sleep(POLL_SECONDS)
 
     log.info("cerrando…")
     if rec.active:
-        path = rec.stop()
-        if path:
-            path.rename(path.with_name(f"{path.stem}_interrumpido.mp4"))
+        p = rec.stop()
+        if p:
+            p.rename(p.with_name(f"{p.stem}_interrumpido.mp4"))
 
 
 def main():
@@ -612,6 +645,8 @@ def main():
                    help="minutos a grabar desde que abre el trade")
     p.add_argument("--exit-minutes", type=float, default=2,
                    help="minutos a grabar cuando el trade cierra")
+    p.add_argument("--entry-grace", type=float, default=120,
+                   help="segundos tras abrir un trade en que aún vale su clip de apertura")
     p.add_argument("--list-screens", action="store_true")
     p.add_argument("--test", type=int, metavar="SEGS",
                    help="graba N segundos ya, para probar permisos y pantalla")
