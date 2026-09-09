@@ -134,7 +134,37 @@ def list_screens():
             m = re.search(r"\[(\d+)\]\s*(Capture screen \d+)", line)
             if m:
                 print(f"   --screen {m.group(1)}   {m.group(2)}")
-    print("\nProbá cuál es cuál con:  python3 trade_recorder.py --test 10 --screen N\n")
+    print("\nOjo: una cámara virtual (Streamlabs/OBS) corre la numeración,")
+    print("por eso el número de arriba no es el de la pantalla.")
+    print("Probá cuál es cuál con:  python3 trade_recorder.py --test 10 --screen N\n")
+
+
+_mapa_pantallas = None
+
+def ffmpeg_device_for_display(cg_index):
+    """Índice de dispositivo que ffmpeg usa para la pantalla número `cg_index`.
+
+    No coinciden: avfoundation numera TODAS las fuentes de video juntas, y una
+    cámara virtual (Streamlabs, OBS) se mete antes que las pantallas y corre la
+    numeración. Asumir que coinciden hacía grabar la pantalla equivocada, así
+    que el mapa se arma leyendo la lista real de dispositivos.
+    """
+    global _mapa_pantallas
+    if _mapa_pantallas is None:
+        _mapa_pantallas = {}
+        try:
+            salida = subprocess.run(
+                ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                capture_output=True, text=True, timeout=20).stderr
+            for linea in salida.splitlines():
+                m = re.search(r"\[(\d+)\]\s*Capture screen (\d+)", linea)
+                if m:
+                    _mapa_pantallas[int(m.group(2))] = int(m.group(1))
+        except Exception as e:
+            log.warning("no pude leer los dispositivos de ffmpeg: %s", e)
+        if _mapa_pantallas:
+            log.info("pantallas → dispositivos ffmpeg: %s", _mapa_pantallas)
+    return _mapa_pantallas.get(cg_index, cg_index)
 
 
 def find_window(app_name):
@@ -183,7 +213,7 @@ def find_window(app_name):
                 # recortar a los límites de la pantalla
                 rx, ry = max(0, rx), max(0, ry)
                 rw, rh = min(ww, dw - rx), min(wh, dh - ry)
-                return (idx, rx, ry, rw, rh)
+                return (ffmpeg_device_for_display(idx), rx, ry, rw, rh)
     except Exception as e:
         log.warning("no se pudo mapear la pantalla: %s", e)
     return None
