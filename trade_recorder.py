@@ -189,6 +189,78 @@ def find_window(app_name):
     return None
 
 
+def window_title(app_name):
+    """Título de la ventana de una app, o '' si no está."""
+    try:
+        import Quartz
+        wins = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly |
+            Quartz.kCGWindowListExcludeDesktopElements, Quartz.kCGNullWindowID)
+        for w in wins:
+            if app_name.lower() in str(w.get("kCGWindowOwnerName", "")).lower():
+                t = str(w.get("kCGWindowName", "") or "")
+                if t:
+                    return t
+    except Exception:
+        pass
+    return ""
+
+
+def switch_symbol(symbol, app="TradingView", timeout=12):
+    """Pone el gráfico en 'symbol' escribiéndolo en TradingView.
+
+    TradingView abre su buscador con solo empezar a teclear, así que basta con
+    poner la app al frente, escribir el símbolo y dar Enter. Se hace antes de
+    grabar, nunca durante.
+
+    Necesita permiso de Accesibilidad. Devuelve True solo si el título de la
+    ventana confirma el cambio — si no se puede verificar, se avisa y se graba
+    igual con lo que haya en pantalla.
+    """
+    if symbol.upper() in window_title(app).upper():
+        log.info("el gráfico ya está en %s", symbol)
+        return True
+
+    script = f'''
+    tell application "{app}" to activate
+    delay 1.2
+    tell application "System Events"
+        if not (exists process "{app}") then return "sin-proceso"
+        tell process "{app}"
+            if not frontmost then return "no-al-frente"
+            keystroke "{symbol}"
+            delay 1.0
+            key code 36
+        end tell
+    end tell
+    return "ok"
+    '''
+    try:
+        r = subprocess.run(["osascript", "-e", script],
+                           capture_output=True, text=True, timeout=25)
+        out = (r.stdout or "").strip()
+        err = (r.stderr or "").strip()
+        if "not allowed assistive access" in err or "-25211" in err:
+            log.warning("falta permiso de Accesibilidad; no puedo cambiar el símbolo")
+            log.warning("Ajustes → Privacidad y seguridad → Accesibilidad → agregá tu Terminal")
+            return False
+        if out != "ok":
+            log.warning("no se pudo cambiar el símbolo (%s)", out or err[:80])
+            return False
+    except Exception as e:
+        log.warning("falló el cambio de símbolo: %s", e)
+        return False
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if symbol.upper() in window_title(app).upper():
+            log.info("gráfico cambiado a %s", symbol)
+            return True
+        time.sleep(0.5)
+    log.warning("no pude confirmar que el gráfico quedó en %s; grabo igual", symbol)
+    return False
+
+
 class Recorder:
     """Envuelve ffmpeg. Un archivo por tramo; los trades largos se parten."""
 
@@ -429,6 +501,10 @@ def run(args):
                 stem = f"{stamp}_{safe(sym)}_{direction}_{safe(strat)}"
                 log.info("▶ trade nuevo: %s %s @ %s (%s)",
                          sym, direction, info["entry"], strat)
+                # Poner el gráfico en el símbolo operado ANTES de grabar, para
+                # que el video no muestre otro par.
+                if args.auto_symbol and args.window:
+                    switch_symbol(sym, args.window)
                 if rec.start(stem):
                     current = {"id": pid, "stem": stem, "part": 1}
                 else:
@@ -455,6 +531,10 @@ def main():
                    help="minutos por archivo antes de partir")
     p.add_argument("--window", default="TradingView",
                    help="grabar solo la ventana de esta app; --window '' para pantalla completa")
+    p.add_argument("--no-auto-symbol", dest="auto_symbol", action="store_false",
+                   help="no cambiar el símbolo del gráfico al abrirse un trade")
+    p.add_argument("--symbol-test", metavar="SIMBOLO",
+                   help="probar el cambio de símbolo (ej: --symbol-test NAS100)")
     p.add_argument("--list-screens", action="store_true")
     p.add_argument("--test", type=int, metavar="SEGS",
                    help="graba N segundos ya, para probar permisos y pantalla")
@@ -473,6 +553,12 @@ def main():
 
     if args.list_screens:
         list_screens()
+        return
+
+    if args.symbol_test:
+        ok = switch_symbol(args.symbol_test, args.window or "TradingView")
+        print(("\n✅  Cambió a " if ok else "\n⚠️   No se pudo cambiar a ")
+              + args.symbol_test + "\n")
         return
 
     if args.test:
