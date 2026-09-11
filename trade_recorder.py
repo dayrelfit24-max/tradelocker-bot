@@ -571,10 +571,22 @@ def run(args):
     closing = []        # cierres pendientes de grabar
     recording = None    # pid cuyo clip de apertura se está grabando
 
-    known = set((broker.open_positions() or {}).keys())
+    # Las posiciones que ya estaban abiertas no tienen clip de apertura —ese
+    # momento ya pasó— pero sí se les graba el cierre, que es el que muestra el
+    # trade resuelto. Antes se descartaban enteras y no producían nada.
+    iniciales = broker.open_positions() or {}
+    for pid, info in iniciales.items():
+        direccion = "Long" if info["side"].lower() == "buy" else "Short"
+        tracked[pid] = {
+            "symbol": info["symbol"], "direction": direccion,
+            "strategy": strategy_for(info["symbol"], info["side"]),
+            "stem": f"{datetime.now():%Y-%m-%d_%H%M%S}_{safe(info['symbol'])}_{direccion}_{safe(strategy_for(info['symbol'], info['side']))}",
+            "opened": 0, "entry_clip": None, "skipped": True,
+        }
+    known = set(iniciales.keys())
     if known:
-        log.info("ya hay %d posición(es) abierta(s); se ignoran hasta que cierren",
-                 len(known))
+        log.info("%d posición(es) ya abierta(s): sin clip de apertura, "
+                 "pero se les grabará el cierre", len(known))
     log.info("esperando trades… (Ctrl+C para salir)")
 
     stopping = False
