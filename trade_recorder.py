@@ -41,6 +41,26 @@ SETTLE_SECS   = 8      # margen que se sigue grabando tras el cierre
 log = logging.getLogger("recorder")
 
 
+def _find_ffmpeg():
+    """Ruta absoluta de ffmpeg.
+
+    Bajo launchd el PATH viene casi vacío, así que buscar "ffmpeg" a secas
+    falla con FileNotFoundError y —si no se atrapa— mata el proceso entero
+    justo cuando había un trade para grabar.
+    """
+    import shutil
+    hallado = shutil.which("ffmpeg")
+    if hallado:
+        return hallado
+    for ruta in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"):
+        if os.path.exists(ruta):
+            return ruta
+    return "ffmpeg"   # último recurso: que falle con un mensaje claro
+
+
+FFMPEG = _find_ffmpeg()
+
+
 def load_env(path):
     env = {}
     try:
@@ -126,8 +146,7 @@ class Broker:
 
 # ── Grabación ───────────────────────────────────────────────────────────────
 def list_screens():
-    out = subprocess.run(["ffmpeg", "-f", "avfoundation", "-list_devices", "true",
-                          "-i", ""], capture_output=True, text=True).stderr
+    out = subprocess.run([FFMPEG, "-f", "avfoundation", "-list_devices", "true", "-i", ""], capture_output=True, text=True).stderr
     print("\nPantallas disponibles:\n")
     for line in out.splitlines():
         if "Capture screen" in line:
@@ -154,7 +173,7 @@ def ffmpeg_device_for_display(cg_index):
         _mapa_pantallas = {}
         try:
             salida = subprocess.run(
-                ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                [FFMPEG, "-f", "avfoundation", "-list_devices", "true", "-i", ""],
                 capture_output=True, text=True, timeout=20).stderr
             for linea in salida.splitlines():
                 m = re.search(r"\[(\d+)\]\s*Capture screen (\d+)", linea)
@@ -233,7 +252,7 @@ def join_clips(stem, parts, outdir):
     try:
         lst.write_text("".join(f"file '{Path(p).resolve()}'\n" for p in parts))
         r = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
              "-f", "concat", "-safe", "0", "-i", str(lst),
              "-c", "copy", str(final)],
             capture_output=True, text=True)
@@ -380,7 +399,7 @@ class Recorder:
         # ancho par: x264 lo exige y algunas pantallas dan ancho impar
         vf = crop if crop else "scale=trunc(iw/2)*2:trunc(ih/2)*2"
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
             "-f", "avfoundation",
             "-capture_cursor", "1",
             "-framerate", str(self.fps),
@@ -390,9 +409,16 @@ class Recorder:
             "-vf", vf,
             str(self.path),
         ]
-        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                     stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.PIPE)
+        try:
+            self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                         stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.PIPE)
+        except (FileNotFoundError, OSError) as e:
+            # Sin esto, no encontrar ffmpeg mata el proceso entero y se dejan
+            # de grabar todos los trades siguientes, no solo este.
+            log.error("no pude lanzar ffmpeg (%s): %s", FFMPEG, e)
+            self.proc = None
+            return False
         self.started = time.time()
         time.sleep(2)
         if self.proc.poll() is not None:
@@ -574,7 +600,9 @@ def run(args):
         except Exception as e:
             log.warning("no se pudo renombrar: %s", e)
 
+    fallos = 0
     while not stopping:
+      try:
         positions = broker.open_positions()
         if positions is None:          # error de red: no cortar la grabación
             time.sleep(POLL_SECONDS)
@@ -666,7 +694,15 @@ def run(args):
                 break
 
         known = set(positions.keys())
+        fallos = 0
         time.sleep(POLL_SECONDS)
+
+      except Exception as e:
+        # El bucle tiene que sobrevivir a lo inesperado: si se cae, se pierden
+        # todos los trades siguientes hasta que alguien mire el log.
+        fallos += 1
+        log.exception("error en el ciclo (%d seguidos): %s", fallos, e)
+        time.sleep(min(60, POLL_SECONDS * fallos))
 
     log.info("cerrando…")
     if rec.active:

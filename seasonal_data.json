@@ -1,7 +1,7 @@
 {
   "year": 2026,
   "month": 9,
-  "updated": "2026-09-09",
+  "updated": "2026-09-11",
   "source": "Auto-calculated from SPY/DIA/QQQ 10yr history via yfinance",
   "instruments": {
     "ES": {
